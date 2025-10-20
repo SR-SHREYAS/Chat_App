@@ -6,7 +6,8 @@ if (!room) {
   window.location.href = "/";
 }
 
-const socket = new WebSocket(`ws://${location.host}/room?room=${room}`);
+const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+const socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}`);
 
 socket.onmessage = (event) => {
   try {
