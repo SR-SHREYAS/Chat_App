@@ -11,6 +11,7 @@ import (
 )
 
 type room struct {
+	name string
 
 	// hold all current clients in room as a map
 	clients map[*client]bool
@@ -23,8 +24,9 @@ type room struct {
 	forward chan []byte
 }
 
-func newRoom() *room {
+func newRoom(name string) *room {
 	return &room{
+		name:    name,
 		forward: make(chan []byte),
 		join:    make(chan *client),
 		leave:   make(chan *client),
@@ -43,6 +45,13 @@ func (r *room) run() {
 		case client := <-r.leave:
 			delete(r.clients, client)
 			close(client.receive)
+			if len(r.clients) == 0 {
+				mu.Lock()
+				delete(rooms, r.name)
+				mu.Unlock()
+				log.Printf("Room closed and cleaned up: %s", r.name)
+				return
+			}
 		// forward message to all clients
 		case msg := <-r.forward:
 			for client := range r.clients {
@@ -66,10 +75,11 @@ func getRoom(name string) *room {
 		return room
 	}
 	// else create a new room
-	room := newRoom()
+	room := newRoom(name)
 	rooms[name] = room
 
 	go room.run()
+	log.Printf("New room created: %s", name)
 	return room
 }
 
