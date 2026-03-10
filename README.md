@@ -102,15 +102,30 @@ When multiple goroutines need to access a shared resource (like the global map o
 
 1.  **Join**: A user enters a room name on the homepage and is directed to `/chat?room=my-room`.
 2.  **Connect**: The browser loads `chat.html`, and its JavaScript opens a WebSocket connection to the server's `/room` endpoint.
-3.  **Upgrade**: The server's `room.ServeHTTP` handler upgrades the connection, creates a `client` object for this user, and adds the client to the appropriate `room` via the `join` channel.
+3.  **Upgrade & History**: The server's `/room` handler queries the database for recent message history. It then upgrades the connection, creates a `client` object, and sends the historical messages to the new client. Finally, it adds the client to the appropriate `room` via the `join` channel.
 4.  **Send Message**: The user types a message and hits send. The JavaScript sends the text over the WebSocket.
-5.  **Read & Forward**: The `client.read()` goroutine on the server receives the text, wraps it in a JSON object with the username, and sends it to the `room.forward` channel.
+5.  **Read, Store & Forward**: The `client.read()` goroutine on the server receives the text. It first **saves the message to the PostgreSQL database**. Then, it wraps it in a JSON object with the username and sends it to the `room.forward` channel.
 6.  **Broadcast**: The `room.run()` goroutine receives the message from its `forward` channel and sends it to the `receive` channel of every client currently in that room.
 7.  **Write & Display**: Each client's `write()` goroutine receives the message on its `receive` channel, sends it down the WebSocket to the browser, where JavaScript renders it on the screen.
 
 ## How to Run
 
-1.  **Prerequisites**: Make sure you have Go installed.
+### 1. Database Setup (PostgreSQL)
+
+This project requires a PostgreSQL database. The easiest way to run one locally is with Docker.
+
+1.  **Run PostgreSQL in Docker**:
+    ```bash
+    docker run --name chat-postgres -e POSTGRES_PASSWORD=mysecretpassword -p 5432:5432 -d postgres
+    ```
+2.  **Set Environment Variable**: Create a `.env` file in the project root with your database connection string:
+    ```
+    DATABASE_URL=postgres://postgres:mysecretpassword@localhost:5432/postgres?sslmode=disable
+    ```
+
+### 2. Application Setup
+
+1.  **Prerequisites**: Make sure you have Go and Docker installed.
 2.  **Install Dependencies**: Open a terminal in the project root and run:
     ```bash
     go mod tidy
@@ -121,9 +136,29 @@ When multiple goroutines need to access a shared resource (like the global map o
     ```
 4.  **Access the App**: Open your web browser and navigate to `http://localhost:8080`.
 
+## Deployment to Render
+
+To deploy this with the database, follow these steps:
+
+1.  **Create Database**:
+    *   Log in to your Render Dashboard.
+    *   Click **New +** -> **PostgreSQL**.
+    *   Give it a name (e.g., `chat-db`) and choose the Free tier.
+    *   Wait for it to be created.
+
+2.  **Get Connection String**:
+    *   On the database page, find the **Internal Database URL**. Copy it.
+
+3.  **Configure Web Service**:
+    *   Go to your existing Chat App web service on Render.
+    *   Go to **Environment**.
+    *   Add a new Environment Variable:
+        *   Key: `DATABASE_URL`
+        *   Value: (Paste the Internal Database URL you copied)
+    *   Save changes. Render will automatically redeploy your app.
+
 ## Future Goals
 
 -   **User Authentication**: Implement a proper user login system using a service like Auth0. The creator of a room (admin) could generate access tokens for others to join.
--   **Message Persistence**: Integrate a database like PostgreSQL to store chat history, allowing users to view older messages upon joining a room.
 -   **File Transfers**: Add the ability for users to send and receive files (images, documents) within the chat, including a download feature.
 -   **End-to-End Encryption (E2EE)**: Implement E2EE for private, one-on-one messaging between two users, ensuring that even the server cannot read the message content.

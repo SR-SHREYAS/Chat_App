@@ -1,8 +1,10 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,7 +12,9 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type templateHandler struct {
@@ -18,6 +22,16 @@ type templateHandler struct {
 	filename string
 	templ    *template.Template
 }
+
+var (
+	db       *sql.DB
+	upgrader = &websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024}
+)
+
+const (
+	socketBufferSize  = 1024
+	messageBufferSize = 256
+)
 
 // handling template for our server
 
@@ -28,6 +42,23 @@ func (t *templateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t.templ.Execute(w, r)
 }
 
+func createTable() {
+	exec := `
+	CREATE TABLE IF NOT EXISTS messages (
+		id SERIAL PRIMARY KEY,
+		room_name VARCHAR(255) NOT NULL,
+		user_name VARCHAR(255) NOT NULL,
+		message TEXT NOT NULL,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	);
+	`
+	_, err := db.Exec(exec)
+	if err != nil {
+		log.Fatalf("Could not create messages table: %v", err)
+	}
+	log.Println("Messages table created or already exists.")
+}
+
 func main() {
 
 	// Load .env file, but don't fail if it's not present (for deployment)
@@ -36,8 +67,22 @@ func main() {
 		log.Println("No .env file found, using environment variables from system")
 	}
 
-	// make every randomly generated number unique
-	rand.Seed(time.Now().UnixNano())
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is not set")
+	}
+	db, err = sql.Open("postgres", databaseURL)
+	if err != nil {
+		log.Fatalf("Could not connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Production settings: Limit connections to prevent overwhelming the DB
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	createTable()
 
 	// var addr = flag.String("addr", ":8080", "The addr of the application")
 	// flag.Parse()
@@ -57,12 +102,38 @@ func main() {
 			http.Error(w, "Missing room parameter", http.StatusBadRequest)
 			return
 		}
-		realRoom := getRoom(roomName) // Get the room instance
-		realRoom.ServeHTTP(w, r)      // Call the ServeHTTP method on the room instance
+		realRoom := getRoom(roomName)
+
+		socket, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Println("Upgrade error:", err)
+			return
+		}
+		client := &client{
+			socket:  socket,
+			room:    realRoom,
+			receive: make(chan []byte, messageBufferSize),
+			name:    fmt.Sprintf("user-%s", r.URL.Query().Get("user_id")), // A placeholder for user identity
+			db:      db,
+		}
+
+		go sendRecentMessages(client)
+
+		realRoom.join <- client
+
+		defer func() { realRoom.leave <- client }()
+		go client.write()
+		client.read()
 	})
 
 	// Health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if err := db.Ping(); err != nil {
+			log.Printf("Health check failed: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("Database Unreachable"))
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
@@ -75,6 +146,36 @@ func main() {
 		log.Fatal("ListenAndServe:", err)
 	}
 
+}
+
+func sendRecentMessages(c *client) {
+	rows, err := db.Query(`
+		SELECT user_name, message FROM messages
+		WHERE room_name = $1
+		ORDER BY created_at ASC
+		LIMIT 50
+	`, c.room.name)
+	if err != nil {
+		log.Printf("Could not query recent messages for room %s: %v", c.room.name, err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userName, message string
+		if err := rows.Scan(&userName, &message); err != nil {
+			log.Printf("Error scanning message row: %v", err)
+			continue
+		}
+		msgJSON, err := json.Marshal(map[string]string{
+			"name":    userName,
+			"message": message,
+		})
+		if err == nil {
+			c.receive <- msgJSON
+		}
+	}
+	log.Printf("Sent %d recent messages to %s in room %s", 50, c.name, c.room.name)
 }
 
 // CORSMiddleware adds the necessary headers to handle Cross-Origin Resource Sharing.

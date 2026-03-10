@@ -1,21 +1,10 @@
 # Environment variables
-# Do not commit this file to your public repository.
+# Contains sensitive information like database credentials.
 .env
 
-# Compiled binary
-# The name will match the module name in go.mod or your output flag.
-real_time_chat_app
-real_time_chat_app.exe
+# Go build files
+# The compiled binary of your application.
+chat-app
 
-# OS-generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# IDE-specific files
-.idea/
+# IDE/Editor specific files
 .vscode/

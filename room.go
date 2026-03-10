@@ -1,16 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
-	"net/http"
 	"sync"
-
-	"github.com/gorilla/websocket"
 )
 
 type room struct {
+	name string
 
 	// hold all current clients in room as a map
 	clients map[*client]bool
@@ -23,8 +21,9 @@ type room struct {
 	forward chan []byte
 }
 
-func newRoom() *room {
+func newRoom(name string) *room {
 	return &room{
+		name:    name,
 		forward: make(chan []byte),
 		join:    make(chan *client),
 		leave:   make(chan *client),
@@ -38,11 +37,34 @@ func (r *room) run() {
 		select {
 		// adding a user to the room/channel
 		case client := <-r.join:
+			// Add the client to the room first.
 			r.clients[client] = true
+			// Then, broadcast the join message to everyone, including the new client.
+			sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s joined the room", client.name)}
+			if msg, err := json.Marshal(sysMsg); err == nil {
+				for c := range r.clients {
+					c.receive <- msg
+				}
+			}
 		//removing a user from the room/channel
 		case client := <-r.leave:
 			delete(r.clients, client)
 			close(client.receive)
+			if len(r.clients) == 0 {
+				mu.Lock()
+				delete(rooms, r.name)
+				mu.Unlock()
+				log.Printf("Room closed and cleaned up: %s", r.name)
+				return
+			} else {
+				// Broadcast system message: User left
+				sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s left the room", client.name)}
+				if msg, err := json.Marshal(sysMsg); err == nil {
+					for c := range r.clients {
+						c.receive <- msg
+					}
+				}
+			}
 		// forward message to all clients
 		case msg := <-r.forward:
 			for client := range r.clients {
@@ -66,47 +88,10 @@ func getRoom(name string) *room {
 		return room
 	}
 	// else create a new room
-	room := newRoom()
+	room := newRoom(name)
 	rooms[name] = room
 
 	go room.run()
+	log.Printf("New room created: %s", name)
 	return room
-}
-
-// upgrade a basic http connection to websocket connection
-const (
-	socketBufferSize  = 1024
-	messageBufferSize = 256
-)
-
-var upgrader = &websocket.Upgrader{ReadBufferSize: socketBufferSize, WriteBufferSize: socketBufferSize}
-
-func (r *room) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-
-	roomName := req.URL.Query().Get("room")
-	if roomName == "" {
-		http.Error(w, "Missing room parameter", http.StatusBadRequest)
-		return
-	}
-
-	realRoom := getRoom(roomName)
-
-	socket, err := upgrader.Upgrade(w, req, nil)
-	if err != nil {
-		log.Println("Upgrade error:", err)
-		return
-	}
-	client := &client{
-		socket:  socket,
-		room:    realRoom,
-		receive: make(chan []byte, messageBufferSize),
-		name:    fmt.Sprintf("user%d", rand.Intn(1000)),
-	}
-	realRoom.join <- client
-
-	defer func() {
-		realRoom.leave <- client
-	}()
-	go client.write()
-	client.read()
 }
