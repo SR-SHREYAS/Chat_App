@@ -23,6 +23,8 @@ function connect() {
     // Reset the retry timeout on a successful connection
     retryTimeout = 1000;
     statusDiv.style.display = "none";
+    document.getElementById("msg").disabled = false;
+    document.getElementById("sendBtn").disabled = false;
   };
 
   socket.onmessage = (event) => {
@@ -59,7 +61,20 @@ function connect() {
   };
 
   socket.onclose = (event) => {
-    console.log(`WebSocket disconnected. Retrying in ${retryTimeout / 1000}s...`);
+    document.getElementById("msg").disabled = true;
+    document.getElementById("sendBtn").disabled = true;
+
+    const { code, reason, wasClean } = event;
+    // 1000: Normal Closure, 1008: Policy Violation, 1011: Internal Error
+    const nonRetryableCodes = [1000, 1008, 1011];
+
+    if (wasClean || nonRetryableCodes.includes(code)) {
+      statusDiv.innerText = "Connection closed. Please refresh the page to reconnect.";
+      statusDiv.style.display = "block";
+      return;
+    }
+
+    console.log(`WebSocket disconnected (code: ${code}, reason: "${reason || "none"}"). Retrying in ${retryTimeout / 1000}s...`);
     statusDiv.innerText = `Connection lost. Reconnecting in ${retryTimeout / 1000}s...`;
     statusDiv.style.display = "block";
     // Schedule the next reconnection attempt
@@ -78,12 +93,15 @@ function connect() {
 
 function sendMessage() {
   const input = document.getElementById("msg");
-  if (socket && socket.readyState === WebSocket.OPEN && input.value.trim() !== "") {
-    socket.send(input.value);
-    input.value = "";
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    if (input.value.trim() !== "") {
+      socket.send(input.value);
+      input.value = "";
+    }
   } else {
     console.error("Cannot send message: WebSocket is not open.");
-    // You could also display a small warning to the user here.
+    statusDiv.innerText = "Message not sent. You are currently disconnected.";
+    statusDiv.style.display = "block";
   }
 }
 
