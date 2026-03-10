@@ -2,6 +2,8 @@
 
 This project is a real-time, room-based chat application built with a Go backend and a simple HTML/CSS/JavaScript frontend. It demonstrates the power of Go's concurrency model (goroutines and channels) and WebSockets to create efficient, real-time web applications.
 
+**Live Demo:** [https://chat-app-632q.onrender.com/](https://chat-app-632q.onrender.com/)
+
 ## Core Concepts & Technologies
 
 This project is built upon a few key technologies and programming concepts.
