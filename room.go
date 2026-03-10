@@ -50,9 +50,6 @@ func (r *room) run() {
 				mu.Lock()
 				defer mu.Unlock()
 				delete(rooms, r.name)
-				close(r.join)
-				close(r.leave)
-				close(r.forward)
 				log.Printf("Room closed and cleaned up: %s", r.name)
 				return
 			}

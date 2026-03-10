@@ -2,13 +2,11 @@ package main
 
 import (
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"text/template"
-	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -35,9 +33,6 @@ func main() {
 	if err != nil {
 		log.Println("No .env file found, using environment variables from system")
 	}
-
-	// make every randomly generated number unique
-	rand.Seed(time.Now().UnixNano())
 
 	// var addr = flag.String("addr", ":8080", "The addr of the application")
 	// flag.Parse()
