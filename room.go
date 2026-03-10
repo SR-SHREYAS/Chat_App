@@ -46,9 +46,13 @@ func (r *room) run() {
 			delete(r.clients, client)
 			close(client.receive)
 			if len(r.clients) == 0 {
+				// Room is empty, clean it up
 				mu.Lock()
+				defer mu.Unlock()
 				delete(rooms, r.name)
-				mu.Unlock()
+				close(r.join)
+				close(r.leave)
+				close(r.forward)
 				log.Printf("Room closed and cleaned up: %s", r.name)
 				return
 			}
