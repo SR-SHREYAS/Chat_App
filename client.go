@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
 
 	"github.com/gorilla/websocket"
 )
@@ -40,7 +40,7 @@ func (c *client) read() {
 
 		jsMessage, err := json.Marshal(outgoing)
 		if err != nil {
-			log.Println("Encoding failed:", err)
+			fmt.Println("Enconding failed!")
 			continue
 		}
 
