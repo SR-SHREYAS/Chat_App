@@ -84,8 +84,6 @@ func main() {
 
 	createTable()
 
-	// var addr = flag.String("addr", ":8080", "The addr of the application")
-	// flag.Parse()
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -117,7 +115,7 @@ func main() {
 			db:      db,
 		}
 
-		go sendRecentMessages(client)
+		sendRecentMessages(client)
 
 		realRoom.join <- client
 
@@ -161,6 +159,7 @@ func sendRecentMessages(c *client) {
 	}
 	defer rows.Close()
 
+	count := 0
 	for rows.Next() {
 		var userName, message string
 		if err := rows.Scan(&userName, &message); err != nil {
@@ -173,9 +172,17 @@ func sendRecentMessages(c *client) {
 		})
 		if err == nil {
 			c.receive <- msgJSON
+			count++
+		} else {
+			log.Printf("Error marshaling message for user %s: %v", userName, err)
 		}
 	}
-	log.Printf("Sent %d recent messages to %s in room %s", 50, c.name, c.room.name)
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating recent messages for room %s: %v", c.room.name, err)
+	}
+
+	log.Printf("Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
 }
 
 // CORSMiddleware adds the necessary headers to handle Cross-Origin Resource Sharing.

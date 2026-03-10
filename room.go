@@ -31,7 +31,7 @@ func newRoom(name string) *room {
 	}
 }
 
-// each room is a separete thread that should be run independently of the main thread
+// each room is a separate thread that should be run independently of the main thread
 func (r *room) run() {
 	for {
 		select {
