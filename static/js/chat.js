@@ -15,8 +15,11 @@ let socket;
 let retryTimeout = 1000; // Start with a 1-second retry delay
 
 function connect() {
+  // Generate a simple random ID for the user for this session
+  const userId = Math.random().toString(36).substring(2, 9);
+
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}`);
+  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}&user_id=${userId}`);
 
   socket.onopen = () => {
     console.log("WebSocket connection established.");
@@ -30,6 +33,17 @@ function connect() {
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+
+      // Handle System messages differently
+      if (data.name === "System") {
+        const sysDiv = document.createElement("div");
+        sysDiv.classList.add("system-message");
+        sysDiv.textContent = data.message;
+        document.getElementById("messages").appendChild(sysDiv);
+        const messagesDiv = document.getElementById("messages");
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        return;
+      }
 
       // Create the container div
       const msgContainer = document.createElement("div");

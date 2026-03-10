@@ -1,8 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
-	"fmt"
+	"log"
 
 	"github.com/gorilla/websocket"
 )
@@ -18,6 +19,8 @@ type client struct {
 	room *room
 
 	name string
+
+	db *sql.DB
 }
 
 // send message function
@@ -32,6 +35,15 @@ func (c *client) read() {
 			return
 		}
 
+		// Save to database before forwarding
+		_, err = c.db.Exec(`
+            INSERT INTO messages (room_name, user_name, message)
+            VALUES ($1, $2, $3)
+        `, c.room.name, c.name, string(msg))
+		if err != nil {
+			log.Printf("Failed to save message to DB: %v", err)
+		}
+
 		// incoming message from the client into json
 		outgoing := map[string]string{
 			"name":    c.name,
@@ -40,7 +52,7 @@ func (c *client) read() {
 
 		jsMessage, err := json.Marshal(outgoing)
 		if err != nil {
-			fmt.Println("Enconding failed!")
+			log.Println("Encoding failed:", err)
 			continue
 		}
 
