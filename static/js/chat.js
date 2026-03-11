@@ -13,8 +13,18 @@ document.body.appendChild(statusDiv);
 
 let socket;
 let retryTimeout = 1000; // Start with a 1-second retry delay
+let roomPassword = null;
 
 function connect() {
+  // Prompt for password only if we haven't stored it yet
+  if (roomPassword === null) {
+    roomPassword = prompt("Please enter the room password:", "");
+    if (roomPassword === null) {
+      alert("Password is required to join or create a private room.");
+      return; // Stop connection attempt
+    }
+  }
+
   // Generate a simple random ID for the user for this session
   const userId = Math.random().toString(36).substring(2, 9);
 
@@ -23,6 +33,12 @@ function connect() {
 
   socket.onopen = () => {
     console.log("WebSocket connection established.");
+    // Send authentication message immediately
+    socket.send(JSON.stringify({
+      type: "auth",
+      password: roomPassword
+    }));
+
     // Reset the retry timeout on a successful connection
     retryTimeout = 1000;
     statusDiv.style.display = "none";
@@ -81,6 +97,15 @@ function connect() {
     const { code, reason, wasClean } = event;
     // 1000: Normal Closure, 1008: Policy Violation, 1011: Internal Error
     const nonRetryableCodes = [1000, 1008, 1011];
+
+    // Specifically handle authentication failure (1008)
+    if (code === 1008) {
+      roomPassword = null; // Reset password to re-prompt on next attempt
+      statusDiv.innerText = "Authentication failed. Please refresh to try again.";
+      statusDiv.style.display = "block";
+      setTimeout(connect, 100);
+      return;
+    }
 
     if (wasClean || nonRetryableCodes.includes(code)) {
       statusDiv.innerText = "Connection closed. Please refresh the page to reconnect.";
