@@ -98,6 +98,15 @@ function connect() {
     // 1000: Normal Closure, 1008: Policy Violation, 1011: Internal Error
     const nonRetryableCodes = [1000, 1008, 1011];
 
+    // Specifically handle authentication failure (1008)
+    if (code === 1008) {
+      roomPassword = null; // Reset password to re-prompt on next attempt
+      statusDiv.innerText = "Authentication failed. Please refresh to try again.";
+      statusDiv.style.display = "block";
+      setTimeout(connect, 100);
+      return;
+    }
+
     if (wasClean || nonRetryableCodes.includes(code)) {
       statusDiv.innerText = "Connection closed. Please refresh the page to reconnect.";
       statusDiv.style.display = "block";

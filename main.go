@@ -178,6 +178,11 @@ func handleRoom(w http.ResponseWriter, r *http.Request) {
 		log.Println("Upgrade error:", err)
 		return
 	}
+	defer socket.Close()
+
+	// Set a deadline and size limit for reading the auth message to prevent abuse
+	socket.SetReadDeadline(time.Now().Add(10 * time.Second))
+	socket.SetReadLimit(1024) // Limit auth message to 1KB
 
 	// Expect the first message to be authentication
 	var authData struct {
@@ -186,14 +191,16 @@ func handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := socket.ReadJSON(&authData); err != nil {
 		log.Printf("Failed to read auth message: %v", err)
-		socket.Close()
 		return
 	}
+
+	// Reset read constraints for normal chat operation (0 = no limit)
+	socket.SetReadDeadline(time.Time{})
+	socket.SetReadLimit(0)
 
 	if authData.Type != "auth" {
 		log.Println("Expected auth message type")
 		socket.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Expected auth message"))
-		socket.Close()
 		return
 	}
 
@@ -201,7 +208,6 @@ func handleRoom(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Authentication failed for room %s: %v", roomName, err)
 		socket.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Authentication failed"))
-		socket.Close()
 		return
 	}
 
