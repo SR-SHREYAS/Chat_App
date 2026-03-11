@@ -7,48 +7,64 @@ import (
 	"sync"
 )
 
-// room represents a single chat room with connected clients.
 type room struct {
-	name    string
+	name string
+
+	// hold all current clients in room as a map
 	clients map[*client]bool
-	join    chan *client
-	leave   chan *client
+
+	// join channel for all clients wishing to join
+	join  chan *client
+	leave chan *client
+
+	// broadcast channel for sending messages to all clients
 	forward chan []byte
 }
 
 func newRoom(name string) *room {
 	return &room{
 		name:    name,
-		clients: make(map[*client]bool),
+		forward: make(chan []byte),
 		join:    make(chan *client),
 		leave:   make(chan *client),
-		forward: make(chan []byte),
+		clients: make(map[*client]bool),
 	}
 }
 
-// run is the main event loop for a room, running in its own goroutine.
+// each room is a separate thread that should be run independently of the main thread
 func (r *room) run() {
 	for {
 		select {
 		// adding a user to the room/channel
 		case client := <-r.join:
+			// Add the client to the room first.
 			r.clients[client] = true
-			r.broadcastSystem(fmt.Sprintf("%s joined the room", client.name))
-
+			// Then, broadcast the join message to everyone, including the new client.
+			sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s joined the room", client.name)}
+			if msg, err := json.Marshal(sysMsg); err == nil {
+				for c := range r.clients {
+					c.receive <- msg
+				}
+			}
 		//removing a user from the room/channel
 		case client := <-r.leave:
 			delete(r.clients, client)
 			close(client.receive)
-
 			if len(r.clients) == 0 {
 				mu.Lock()
 				delete(rooms, r.name)
 				mu.Unlock()
-				log.Printf("Room closed (empty): %s", r.name)
+				log.Printf("Room closed and cleaned up: %s", r.name)
 				return
+			} else {
+				// Broadcast system message: User left
+				sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s left the room", client.name)}
+				if msg, err := json.Marshal(sysMsg); err == nil {
+					for c := range r.clients {
+						c.receive <- msg
+					}
+				}
 			}
-			r.broadcastSystem(fmt.Sprintf("%s left the room", client.name))
-
 		// forward message to all clients
 		case msg := <-r.forward:
 			for client := range r.clients {
@@ -58,40 +74,24 @@ func (r *room) run() {
 	}
 }
 
-// broadcastSystem sends a system message to all connected clients.
-func (r *room) broadcastSystem(text string) {
-	sysMsg, err := json.Marshal(map[string]string{
-		"name":    "System",
-		"message": text,
-	})
-	if err != nil {
-		log.Printf("Error marshaling system message: %v", err)
-		return
-	}
-	for c := range r.clients {
-		c.receive <- sysMsg
-	}
-}
+var rooms = make(map[string]*room)
+var mu sync.Mutex
 
-// ---------- Global Room Registry ----------
-
-var (
-	rooms = make(map[string]*room)
-	mu    sync.Mutex
-)
-
-// getRoom returns an existing in-memory room or creates a new one.
 func getRoom(name string) *room {
+
+	// prevent creating a room with same name when multiple users do that st the same time
 	mu.Lock()
 	defer mu.Unlock()
 
-	if r, ok := rooms[name]; ok {
-		return r
+	// if the room name already exists
+	if room, ok := rooms[name]; ok {
+		return room
 	}
+	// else create a new room
+	room := newRoom(name)
+	rooms[name] = room
 
-	r := newRoom(name)
-	rooms[name] = r
-	go r.run()
-	log.Printf("In-memory room created: %s", name)
-	return r
+	go room.run()
+	log.Printf("New room created: %s", name)
+	return room
 }

@@ -5,14 +5,15 @@
   <title>Chat Room</title>
   <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
-<body>
-  <div id="chat-container">
-    <div id="messages"></div>
-    <form id="chat-form">
-      <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" required />
-      <button type="submit">Send</button>
-    </form>
+<body class="chat-body">
+  <header>Chat Room</header>
+  <div id="messages"></div>
+
+  <div class="chat-input">
+    <input id="msg" type="text" placeholder="Type a message..." />
+    <button id="sendBtn">Send</button>
   </div>
+
   <script src="/static/js/chat.js"></script>
 </body>
 </html>
