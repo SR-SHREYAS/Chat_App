@@ -8,64 +8,55 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// client represents a single chatting user
+// client represents a single connected chat user.
 type client struct {
-	// a socket connection for this user
-	socket *websocket.Conn
-
-	// receive is a channel to receive messages from other clients
+	socket  *websocket.Conn
 	receive chan []byte
-
-	room *room
-
-	name string
-
-	db *sql.DB
+	room    *room
+	name    string
+	db      *sql.DB
 }
 
-// send message function
+// read listens for incoming messages from the user's browser,
+// persists them to the database, and forwards them to the room.
 func (c *client) read() {
-
 	defer c.socket.Close()
 
-	// infinite loop , keep reading
 	for {
 		_, msg, err := c.socket.ReadMessage()
 		if err != nil {
 			return
 		}
 
-		// Save to database before forwarding
-		_, err = c.db.Exec(`
-            INSERT INTO messages (room_name, user_name, message)
-            VALUES ($1, $2, $3)
-        `, c.room.name, c.name, string(msg))
-		if err != nil {
-			log.Printf("Failed to save message to DB: %v", err)
+		// Persist message
+		_, dbErr := c.db.Exec(
+			`INSERT INTO messages (room_name, user_name, message) VALUES ($1, $2, $3)`,
+			c.room.name, c.name, string(msg),
+		)
+		if dbErr != nil {
+			log.Printf("Failed to save message to DB: %v", dbErr)
 		}
 
-		// incoming message from the client into json
-		outgoing := map[string]string{
+		// Wrap in JSON with username
+		outgoing, err := json.Marshal(map[string]string{
 			"name":    c.name,
 			"message": string(msg),
-		}
-
-		jsMessage, err := json.Marshal(outgoing)
+		})
 		if err != nil {
-			log.Println("Encoding failed:", err)
+			log.Printf("JSON encoding failed: %v", err)
 			continue
 		}
 
-		// forward message to the room
-		c.room.forward <- jsMessage
+		c.room.forward <- outgoing
 	}
 }
 
+// write sends messages from the room to the user's browser.
 func (c *client) write() {
 	defer c.socket.Close()
+
 	for msg := range c.receive {
-		err := c.socket.WriteMessage(websocket.TextMessage, msg)
-		if err != nil {
+		if err := c.socket.WriteMessage(websocket.TextMessage, msg); err != nil {
 			return
 		}
 	}

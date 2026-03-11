@@ -14,6 +14,15 @@
     <button id="sendBtn">Send</button>
   </div>
 
+  <script>
+    const roomName = new URLSearchParams(window.location.search).get("room");
+    const userId = "user-" + Math.random().toString(36).substring(2, 8);
+
+    function connectWebSocket() {
+        const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
+        const wsURL = wsProtocol + window.location.host + "/room?room=" + encodeURIComponent(roomName) + "&user_id=" + encodeURIComponent(userId);
+      }
+  </script>
   <script src="/static/js/chat.js"></script>
 </body>
 </html>
