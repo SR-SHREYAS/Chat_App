@@ -15,9 +15,6 @@ let socket;
 let retryTimeout = 1000; // Start with a 1-second retry delay
 let roomPassword = null;
 
-// Generate a simple random ID for the user once for this session
-const userId = Math.random().toString(36).substring(2, 9);
-
 function connect() {
   // Prompt for password only if we haven't stored it yet
   if (roomPassword === null) {
@@ -28,11 +25,20 @@ function connect() {
     }
   }
 
+  // Generate a simple random ID for the user for this session
+  const userId = Math.random().toString(36).substring(2, 9);
+
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}&user_id=${userId}&password=${encodeURIComponent(roomPassword)}`);
+  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}&user_id=${userId}`);
 
   socket.onopen = () => {
     console.log("WebSocket connection established.");
+    // Send authentication message immediately
+    socket.send(JSON.stringify({
+      type: "auth",
+      password: roomPassword
+    }));
+
     // Reset the retry timeout on a successful connection
     retryTimeout = 1000;
     statusDiv.style.display = "none";
