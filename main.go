@@ -171,11 +171,17 @@ func handleRoom(w http.ResponseWriter, r *http.Request) {
 
 	// --- Phase 3: Set up client ---
 	chatRoom := getRoom(roomName)
+
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = "anonymous"
+	}
+
 	c := &client{
 		socket:  socket,
 		room:    chatRoom,
 		receive: make(chan []byte, messageBufferSize),
-		name:    fmt.Sprintf("user-%s", r.URL.Query().Get("user_id")),
+		name:    userID,
 		db:      db,
 	}
 

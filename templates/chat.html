@@ -5,24 +5,14 @@
   <title>Chat Room</title>
   <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
-<body class="chat-body">
-  <header>Chat Room</header>
-  <div id="messages"></div>
-
-  <div class="chat-input">
-    <input id="msg" type="text" placeholder="Type a message..." />
-    <button id="sendBtn">Send</button>
+<body>
+  <div id="chat-container">
+    <div id="messages"></div>
+    <form id="chat-form">
+      <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" required />
+      <button type="submit">Send</button>
+    </form>
   </div>
-
-  <script>
-    const roomName = new URLSearchParams(window.location.search).get("room");
-    const userId = "user-" + Math.random().toString(36).substring(2, 8);
-
-    function connectWebSocket() {
-        const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
-        const wsURL = wsProtocol + window.location.host + "/room?room=" + encodeURIComponent(roomName) + "&user_id=" + encodeURIComponent(userId);
-      }
-  </script>
   <script src="/static/js/chat.js"></script>
 </body>
 </html>
