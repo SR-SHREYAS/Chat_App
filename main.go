@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type templateHandler struct {
@@ -51,12 +52,19 @@ func createTable() {
 		message TEXT NOT NULL,
 		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
+
+	CREATE TABLE IF NOT EXISTS rooms (
+		name VARCHAR(255) PRIMARY KEY,
+		password_hash VARCHAR(255) NOT NULL,
+		expires_at TIMESTAMPTZ NOT NULL,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	);
 	`
 	_, err := db.Exec(exec)
 	if err != nil {
-		log.Fatalf("Could not create messages table: %v", err)
+		log.Fatalf("Could not create tables: %v", err)
 	}
-	log.Println("Messages table created or already exists.")
+	log.Println("Database tables created or already exist.")
 }
 
 func main() {
@@ -94,14 +102,83 @@ func main() {
 	http.Handle("/", &templateHandler{filename: "index.html"})
 	http.Handle("/chat", &templateHandler{filename: "chat.html"})
 
-	http.HandleFunc("/room", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/room", func(w http.ResponseWriter, r *http.Request) { // This handler is getting large, consider moving to its own file.
 		roomName := r.URL.Query().Get("room")
+		password := r.URL.Query().Get("password")
+
 		if roomName == "" {
 			http.Error(w, "Missing room parameter", http.StatusBadRequest)
 			return
 		}
-		realRoom := getRoom(roomName)
 
+		// --- Room Authentication Logic ---
+		var passwordHash string
+		var expiresAt time.Time
+		err := db.QueryRow("SELECT password_hash, expires_at FROM rooms WHERE name = $1", roomName).Scan(&passwordHash, &expiresAt)
+
+		// Check if the room has expired
+		if err == nil && time.Now().After(expiresAt) {
+			log.Printf("Room '%s' has expired. Deleting old data.", roomName)
+			// Delete the expired room and its messages in a transaction.
+			tx, txErr := db.Begin()
+			if txErr != nil {
+				log.Printf("Failed to begin transaction for room deletion: %v", txErr)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			tx.Exec("DELETE FROM messages WHERE room_name = $1", roomName)
+			tx.Exec("DELETE FROM rooms WHERE name = $1", roomName)
+			if err := tx.Commit(); err != nil {
+				log.Printf("Failed to commit transaction for room deletion: %v", err)
+			}
+			err = sql.ErrNoRows // Set err to ErrNoRows to trigger the creation flow below.
+		}
+
+		if err == sql.ErrNoRows { // This block now handles both non-existent and expired rooms.
+			// Room does not exist, so create it.
+			if password == "" {
+				http.Error(w, "Room does not exist. A password is required to create it.", http.StatusUnauthorized)
+				return
+			}
+
+			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+			if err != nil {
+				log.Printf("Failed to hash password: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			// Default TTL of 24 hours for now.
+			expiresAt = time.Now().Add(24 * time.Hour)
+
+			_, err = db.Exec("INSERT INTO rooms (name, password_hash, expires_at) VALUES ($1, $2, $3)", roomName, string(hash), expiresAt)
+			if err != nil {
+				log.Printf("Failed to create room: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			log.Printf("New private room created: %s", roomName)
+		} else if err != nil {
+			// Other database error.
+			log.Printf("Failed to query room: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		} else {
+			// Room exists, check password.
+			if password == "" {
+				http.Error(w, "This room is private. Please provide a password.", http.StatusUnauthorized)
+				return
+			}
+
+			if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+				http.Error(w, "Invalid password", http.StatusUnauthorized)
+				return
+			}
+		}
+		// --- End of Authentication Logic ---
+
+		// If we reach here, auth is successful.
+		realRoom := getRoom(roomName)
 		socket, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Println("Upgrade error:", err)
@@ -116,6 +193,15 @@ func main() {
 		}
 
 		sendRecentMessages(client)
+
+		// Send a system message about when the room expires
+		// We need to fetch it again or use the one we just inserted/queried
+		// Since expiresAt is available in this scope (either from query or creation), we can use it.
+		expirationMsg := fmt.Sprintf("Welcome! This private room will expire at %s", expiresAt.Format(time.RFC1123))
+		sysMsg := map[string]string{"name": "System", "message": expirationMsg}
+		if msgBytes, err := json.Marshal(sysMsg); err == nil {
+			client.receive <- msgBytes
+		}
 
 		realRoom.join <- client
 

@@ -13,13 +13,23 @@ document.body.appendChild(statusDiv);
 
 let socket;
 let retryTimeout = 1000; // Start with a 1-second retry delay
+let roomPassword = null;
+
+// Generate a simple random ID for the user once for this session
+const userId = Math.random().toString(36).substring(2, 9);
 
 function connect() {
-  // Generate a simple random ID for the user for this session
-  const userId = Math.random().toString(36).substring(2, 9);
+  // Prompt for password only if we haven't stored it yet
+  if (roomPassword === null) {
+    roomPassword = prompt("Please enter the room password:", "");
+    if (roomPassword === null) {
+      alert("Password is required to join or create a private room.");
+      return; // Stop connection attempt
+    }
+  }
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}&user_id=${userId}`);
+  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}&user_id=${userId}&password=${encodeURIComponent(roomPassword)}`);
 
   socket.onopen = () => {
     console.log("WebSocket connection established.");
