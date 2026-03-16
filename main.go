@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -25,7 +27,11 @@ type templateHandler struct {
 
 var (
 	db       *sql.DB
-	upgrader = &websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024}
+	upgrader = &websocket.Upgrader{
+		ReadBufferSize:  socketBufferSize,
+		WriteBufferSize: socketBufferSize,
+		CheckOrigin:     checkSameOrigin,
+	}
 )
 
 const (
@@ -95,9 +101,9 @@ func main() {
 	http.Handle("/chat", &templateHandler{filename: "chat.html"})
 
 	http.HandleFunc("/room", func(w http.ResponseWriter, r *http.Request) {
-		roomName := r.URL.Query().Get("room")
+		roomName := sanitizeQueryValue(r.URL.Query().Get("room"), 64)
 		if roomName == "" {
-			http.Error(w, "Missing room parameter", http.StatusBadRequest)
+			http.Error(w, "Missing or invalid room parameter", http.StatusBadRequest)
 			return
 		}
 		realRoom := getRoom(roomName)
@@ -111,7 +117,7 @@ func main() {
 			socket:  socket,
 			room:    realRoom,
 			receive: make(chan []byte, messageBufferSize),
-			name:    fmt.Sprintf("user-%s", r.URL.Query().Get("user_id")), // A placeholder for user identity
+			name:    fmt.Sprintf("user-%s", sanitizeQueryValue(r.URL.Query().Get("user_id"), 32)), // A placeholder for user identity
 			db:      db,
 		}
 
@@ -144,6 +150,29 @@ func main() {
 		log.Fatal("ListenAndServe:", err)
 	}
 
+}
+
+func checkSameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsedOrigin, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsedOrigin.Host, r.Host)
+}
+
+func sanitizeQueryValue(v string, maxLen int) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if maxLen > 0 && len(v) > maxLen {
+		v = v[:maxLen]
+	}
+	return v
 }
 
 func sendRecentMessages(c *client) {
