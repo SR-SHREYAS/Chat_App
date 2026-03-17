@@ -1,0 +1,29 @@
+name: Render Keepalive Ping
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Render service
+        env:
+          KEEPALIVE_URL: ${{ secrets.KEEPALIVE_URL }}
+        run: |
+          if [ -z "$KEEPALIVE_URL" ]; then
+            echo "KEEPALIVE_URL secret is not set."
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --location \
+            --max-time 20 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-max-time 60 \
+            "$KEEPALIVE_URL" > /dev/null
+          echo "Ping successful."
