@@ -169,8 +169,11 @@ func sanitizeQueryValue(v string, maxLen int) string {
 	if v == "" {
 		return ""
 	}
-	if maxLen > 0 && len(v) > maxLen {
-		v = v[:maxLen]
+	if maxLen > 0 {
+		runes := []rune(v)
+		if len(runes) > maxLen {
+			v = string(runes[:maxLen])
+		}
 	}
 	return v
 }

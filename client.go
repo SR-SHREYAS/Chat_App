@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,11 +32,13 @@ type client struct {
 	name string
 
 	db *sql.DB
+
+	closeOnce sync.Once
 }
 
 // send message function
 func (c *client) read() {
-	defer c.socket.Close()
+	defer c.closeSocket()
 
 	c.socket.SetReadLimit(maxMessageSize)
 	_ = c.socket.SetReadDeadline(time.Now().Add(pongWait))
@@ -84,7 +87,7 @@ func (c *client) read() {
 }
 
 func (c *client) write() {
-	defer c.socket.Close()
+	defer c.closeSocket()
 
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
@@ -94,7 +97,6 @@ func (c *client) write() {
 		case msg, ok := <-c.receive:
 			_ = c.socket.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				_ = c.socket.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 			if err := c.socket.WriteMessage(websocket.TextMessage, msg); err != nil {
@@ -107,4 +109,10 @@ func (c *client) write() {
 			}
 		}
 	}
+}
+
+func (c *client) closeSocket() {
+	c.closeOnce.Do(func() {
+		_ = c.socket.Close()
+	})
 }

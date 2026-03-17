@@ -48,11 +48,7 @@ func (r *room) run() {
 		case client := <-r.leave:
 			removed := r.removeClient(client)
 
-			if len(r.clients) == 0 {
-				mu.Lock()
-				delete(rooms, r.name)
-				mu.Unlock()
-				log.Printf("Room closed and cleaned up: %s", r.name)
+			if r.closeIfEmpty() {
 				return
 			}
 			if !removed {
@@ -67,6 +63,9 @@ func (r *room) run() {
 		// forward message to all clients
 		case msg := <-r.forward:
 			r.broadcast(msg)
+			if r.closeIfEmpty() {
+				return
+			}
 		}
 	}
 }
@@ -78,19 +77,37 @@ func (r *room) removeClient(c *client) bool {
 
 	delete(r.clients, c)
 	close(c.receive)
-	_ = c.socket.Close()
+	c.closeSocket()
 	return true
 }
 
 func (r *room) broadcast(msg []byte) {
+	var slowClients []*client
+
 	for c := range r.clients {
 		select {
 		case c.receive <- msg:
 		default:
-			log.Printf("Dropping slow client %s from room %s", c.name, r.name)
-			r.removeClient(c)
+			slowClients = append(slowClients, c)
 		}
 	}
+
+	for _, c := range slowClients {
+		log.Printf("Dropping slow client %s from room %s", c.name, r.name)
+		r.removeClient(c)
+	}
+}
+
+func (r *room) closeIfEmpty() bool {
+	if len(r.clients) != 0 {
+		return false
+	}
+
+	mu.Lock()
+	delete(rooms, r.name)
+	mu.Unlock()
+	log.Printf("Room closed and cleaned up: %s", r.name)
+	return true
 }
 
 var rooms = make(map[string]*room)
