@@ -157,6 +157,47 @@ To deploy this with the database, follow these steps:
         *   Value: (Paste the Internal Database URL you copied)
     *   Save changes. Render will automatically redeploy your app.
 
+## Keep Render Service Awake (GitHub Actions)
+
+If your Render free service sleeps after inactivity, this workflow can ping your app every 10 minutes.
+
+File used:
+
+```
+.github/workflows/render-keepalive.yml
+```
+
+### Setup Steps
+
+1.  **Commit the workflow file**  
+    Make sure this file exists in your repository:
+    ```
+    .github/workflows/render-keepalive.yml
+    ```
+
+2.  **Add repository secret in GitHub**  
+    - Open your repo on GitHub.
+    - Go to **Settings** -> **Secrets and variables** -> **Actions**.
+    - Click **New repository secret**.
+    - Name: `KEEPALIVE_URL`
+    - Value: your Render health URL, for example:
+      ```
+      https://chat-app-632q.onrender.com/health
+      ```
+
+3.  **Run once manually to verify**  
+    - Go to **Actions** tab.
+    - Open workflow: **Render Keepalive Ping**.
+    - Click **Run workflow**.
+    - Confirm logs show: `Ping successful`.
+
+4.  **Confirm scheduled runs**  
+    The workflow runs every 10 minutes automatically (`*/10 * * * *`).
+
+Notes:
+- If your Render URL changes, update only the `KEEPALIVE_URL` secret.
+- This is a simple keepalive strategy and does not require app code changes.
+
 ## Future Goals
 
 -   **User Authentication**: Implement a proper user login system using a service like Auth0. The creator of a room (admin) could generate access tokens for others to join.
