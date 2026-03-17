@@ -7,6 +7,7 @@ on:
 
 jobs:
   ping:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -19,5 +20,10 @@ jobs:
             exit 1
           fi
 
-          curl --fail --silent --show-error --location --max-time 20 "$KEEPALIVE_URL" > /dev/null
-          echo "Ping successful: $KEEPALIVE_URL"
+          curl --fail --silent --show-error --location \
+            --max-time 20 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-max-time 60 \
+            "$KEEPALIVE_URL" > /dev/null
+          echo "Ping successful."
