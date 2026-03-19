@@ -24,7 +24,7 @@ type room struct {
 func newRoom(name string) *room {
 	return &room{
 		name:    name,
-		forward: make(chan []byte),
+		forward: make(chan []byte, messageBufferSize),
 		join:    make(chan *client),
 		leave:   make(chan *client),
 		clients: make(map[*client]bool),
@@ -42,36 +42,72 @@ func (r *room) run() {
 			// Then, broadcast the join message to everyone, including the new client.
 			sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s joined the room", client.name)}
 			if msg, err := json.Marshal(sysMsg); err == nil {
-				for c := range r.clients {
-					c.receive <- msg
-				}
+				r.broadcast(msg)
 			}
 		//removing a user from the room/channel
 		case client := <-r.leave:
-			delete(r.clients, client)
-			close(client.receive)
-			if len(r.clients) == 0 {
-				mu.Lock()
-				delete(rooms, r.name)
-				mu.Unlock()
-				log.Printf("Room closed and cleaned up: %s", r.name)
+			removed := r.removeClient(client)
+
+			if r.closeIfEmpty() {
 				return
-			} else {
-				// Broadcast system message: User left
-				sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s left the room", client.name)}
-				if msg, err := json.Marshal(sysMsg); err == nil {
-					for c := range r.clients {
-						c.receive <- msg
-					}
-				}
+			}
+			if !removed {
+				continue
+			}
+
+			// Broadcast system message: User left
+			sysMsg := map[string]string{"name": "System", "message": fmt.Sprintf("%s left the room", client.name)}
+			if msg, err := json.Marshal(sysMsg); err == nil {
+				r.broadcast(msg)
 			}
 		// forward message to all clients
 		case msg := <-r.forward:
-			for client := range r.clients {
-				client.receive <- msg
+			r.broadcast(msg)
+			if r.closeIfEmpty() {
+				return
 			}
 		}
 	}
+}
+
+func (r *room) removeClient(c *client) bool {
+	if _, ok := r.clients[c]; !ok {
+		return false
+	}
+
+	delete(r.clients, c)
+	close(c.receive)
+	c.closeSocket()
+	return true
+}
+
+func (r *room) broadcast(msg []byte) {
+	var slowClients []*client
+
+	for c := range r.clients {
+		select {
+		case c.receive <- msg:
+		default:
+			slowClients = append(slowClients, c)
+		}
+	}
+
+	for _, c := range slowClients {
+		log.Printf("Dropping slow client %s from room %s", c.name, r.name)
+		r.removeClient(c)
+	}
+}
+
+func (r *room) closeIfEmpty() bool {
+	if len(r.clients) != 0 {
+		return false
+	}
+
+	mu.Lock()
+	delete(rooms, r.name)
+	mu.Unlock()
+	log.Printf("Room closed and cleaned up: %s", r.name)
+	return true
 }
 
 var rooms = make(map[string]*room)

@@ -1,11 +1,23 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 4 * 1024
 )
 
 // client represents a single chatting user
@@ -21,33 +33,51 @@ type client struct {
 	name string
 
 	db *sql.DB
+
+	closeOnce sync.Once
 }
 
 // send message function
 func (c *client) read() {
+	defer c.closeSocket()
 
-	defer c.socket.Close()
+	c.socket.SetReadLimit(maxMessageSize)
+	_ = c.socket.SetReadDeadline(time.Now().Add(pongWait))
+	c.socket.SetPongHandler(func(string) error {
+		return c.socket.SetReadDeadline(time.Now().Add(pongWait))
+	})
 
-	// infinite loop , keep reading
+	// infinite loop, keep reading
 	for {
 		_, msg, err := c.socket.ReadMessage()
 		if err != nil {
 			return
 		}
 
+		cleanMessage := strings.TrimSpace(string(msg))
+		if cleanMessage == "" {
+			continue
+		}
+
 		// Save to database before forwarding
-		_, err = c.db.Exec(`
-            INSERT INTO messages (room_name, user_name, message)
-            VALUES ($1, $2, $3)
-        `, c.room.name, c.name, string(msg))
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err = c.db.ExecContext(ctx, `
+		            INSERT INTO messages (room_name, user_name, message)
+		            VALUES ($1, $2, $3)
+		        `, c.room.name, c.name, cleanMessage)
+		cancel()
 		if err != nil {
-			log.Printf("Failed to save message to DB: %v", err)
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				log.Printf("DB timeout while saving message for room=%s user=%s", c.room.name, c.name)
+			} else {
+				log.Printf("Failed to save message to DB: %v", err)
+			}
 		}
 
 		// incoming message from the client into json
 		outgoing := map[string]string{
 			"name":    c.name,
-			"message": string(msg),
+			"message": cleanMessage,
 		}
 
 		jsMessage, err := json.Marshal(outgoing)
@@ -62,11 +92,32 @@ func (c *client) read() {
 }
 
 func (c *client) write() {
-	defer c.socket.Close()
-	for msg := range c.receive {
-		err := c.socket.WriteMessage(websocket.TextMessage, msg)
-		if err != nil {
-			return
+	defer c.closeSocket()
+
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case msg, ok := <-c.receive:
+			_ = c.socket.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				return
+			}
+			if err := c.socket.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-ticker.C:
+			_ = c.socket.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.socket.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
+}
+
+func (c *client) closeSocket() {
+	c.closeOnce.Do(func() {
+		_ = c.socket.Close()
+	})
 }
