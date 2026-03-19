@@ -155,7 +155,7 @@ func main() {
 func checkSameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		return true
+		return false
 	}
 	parsedOrigin, err := url.Parse(origin)
 	if err != nil {

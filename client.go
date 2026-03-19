@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -61,12 +62,16 @@ func (c *client) read() {
 		// Save to database before forwarding
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_, err = c.db.ExecContext(ctx, `
-	            INSERT INTO messages (room_name, user_name, message)
-	            VALUES ($1, $2, $3)
-	        `, c.room.name, c.name, cleanMessage)
+		            INSERT INTO messages (room_name, user_name, message)
+		            VALUES ($1, $2, $3)
+		        `, c.room.name, c.name, cleanMessage)
 		cancel()
 		if err != nil {
-			log.Printf("Failed to save message to DB: %v", err)
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				log.Printf("DB timeout while saving message for room=%s user=%s", c.room.name, c.name)
+			} else {
+				log.Printf("Failed to save message to DB: %v", err)
+			}
 		}
 
 		// incoming message from the client into json
