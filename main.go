@@ -36,8 +36,11 @@ func main() {
 	db.SetMaxIdleConns(25)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
+	schemaCtx, cancelSchema := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelSchema()
+
 	messageStore := store.NewMessageStore(db)
-	if err := messageStore.EnsureSchema(context.Background()); err != nil {
+	if err := messageStore.EnsureSchema(schemaCtx); err != nil {
 		log.Fatalf("Could not create messages table: %v", err)
 	}
 	log.Println("Messages table created or already exists.")

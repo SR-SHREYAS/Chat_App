@@ -39,7 +39,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
-	realRoom, client := h.service.HandleRoom(socket, roomName, userID)
+	realRoom, client := h.service.HandleRoom(r.Context(), socket, roomName, userID)
 
 	realRoom.Join(client)
 	defer realRoom.Leave(client)

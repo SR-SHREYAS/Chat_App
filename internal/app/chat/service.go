@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"real_time_chat_app/internal/model"
@@ -43,8 +44,11 @@ func (s *Service) newClient(socket *websocket.Conn, room *Room, userID string) *
 	}
 }
 
-func (s *Service) sendRecentMessages(c *Client) {
-	messages, err := s.store.GetRecentMessages(context.Background(), c.room.name, 50)
+func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
+	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	messages, err := s.store.GetRecentMessages(queryCtx, c.room.name, 50)
 	if err != nil {
 		log.Printf("Could not query recent messages for room %s: %v", c.room.name, err)
 		return
@@ -67,10 +71,10 @@ func (s *Service) sendRecentMessages(c *Client) {
 	log.Printf("Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
 }
 
-func (s *Service) HandleRoom(socket *websocket.Conn, roomName, userID string) (*Room, *Client) {
+func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomName, userID string) (*Room, *Client) {
 	room := s.rooms.GetOrCreate(roomName)
 	client := s.newClient(socket, room, userID)
-	s.sendRecentMessages(client)
+	s.sendRecentMessages(ctx, client)
 	return room, client
 }
 
