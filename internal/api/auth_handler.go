@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -193,8 +194,31 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 func isSecureRequest(r *http.Request) bool {
+	if envFlagEnabled("FORCE_SECURE_COOKIES") {
+		return true
+	}
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	if !envFlagEnabled("TRUST_PROXY_HEADERS") {
+		return false
+	}
+	return strings.EqualFold(firstForwardedProto(r.Header.Get("X-Forwarded-Proto")), "https")
+}
+
+func firstForwardedProto(value string) string {
+	parts := strings.Split(value, ",")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func envFlagEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
