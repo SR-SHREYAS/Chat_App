@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -34,12 +35,17 @@ func NewService(store MessageStore) *Service {
 	}
 }
 
-func (s *Service) newClient(socket *websocket.Conn, room *Room, userID string) *Client {
+func (s *Service) newClient(socket *websocket.Conn, room *Room, userID, userName string) *Client {
+	name := strings.TrimSpace(userName)
+	if name == "" {
+		name = fmt.Sprintf("user-%s", userID)
+	}
+
 	return &Client{
 		socket:   socket,
 		room:     room,
 		receive:  make(chan []byte, MessageBufferSize),
-		name:     fmt.Sprintf("user-%s", userID),
+		name:     name,
 		messages: s.store,
 	}
 }
@@ -71,9 +77,9 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 	log.Printf("Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
 }
 
-func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomName, userID string) (*Room, *Client) {
+func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomName, userID, userName string) (*Room, *Client) {
 	room := s.rooms.GetOrCreate(roomName)
-	client := s.newClient(socket, room, userID)
+	client := s.newClient(socket, room, userID, userName)
 	s.sendRecentMessages(ctx, client)
 	return room, client
 }
