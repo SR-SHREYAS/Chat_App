@@ -26,8 +26,10 @@ const (
 var (
 	ErrInvalidEmail       = errors.New("invalid email")
 	ErrInvalidPassword    = errors.New("invalid password")
+	ErrInvalidDisplayName = errors.New("invalid display name")
 	ErrEmailAlreadyExists = errors.New("email already exists")
 	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrNoUserFound        = errors.New("no user found")
 )
 
 type AuthStore interface {
@@ -35,6 +37,7 @@ type AuthStore interface {
 	GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error)
 	CreateSession(ctx context.Context, userID int64, tokenHash string, expiresAt time.Time) error
 	GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error)
+	UpdateDisplayName(ctx context.Context, userID int64, displayName string) (model.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteExpiredSessions(ctx context.Context) error
 }
@@ -110,7 +113,7 @@ func (s *Service) HandleSignIn(ctx context.Context, input SignInInput) (AuthResu
 	user, storedHash, err := s.store.GetUserCredentialsByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return AuthResult{}, ErrInvalidCredentials
+			return AuthResult{}, ErrNoUserFound
 		}
 		return AuthResult{}, err
 	}
@@ -149,6 +152,33 @@ func (s *Service) HandleSignOut(ctx context.Context, sessionToken string) error 
 		return nil
 	}
 	return s.store.DeleteSession(ctx, hashSessionToken(sessionToken))
+}
+
+func (s *Service) HandleUpdateDisplayName(ctx context.Context, sessionToken, displayName string) (AuthUser, error) {
+	sessionToken = strings.TrimSpace(sessionToken)
+	if sessionToken == "" {
+		return AuthUser{}, ErrInvalidCredentials
+	}
+
+	displayName = normalizeDisplayName(displayName)
+	if displayName == "" {
+		return AuthUser{}, ErrInvalidDisplayName
+	}
+
+	user, err := s.store.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AuthUser{}, ErrInvalidCredentials
+		}
+		return AuthUser{}, err
+	}
+
+	updatedUser, err := s.store.UpdateDisplayName(ctx, user.ID, displayName)
+	if err != nil {
+		return AuthUser{}, err
+	}
+
+	return toAuthUser(updatedUser), nil
 }
 
 func (s *Service) createSessionForUser(ctx context.Context, user model.User) (AuthResult, error) {

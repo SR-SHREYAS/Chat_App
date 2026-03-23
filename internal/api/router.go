@@ -8,6 +8,8 @@ import (
 
 func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.Handle("/", view.NewTemplateHandler("index.html"))
+	mux.Handle("/signup", view.NewTemplateHandler("signup.html"))
+	mux.Handle("/dashboard", view.NewTemplateHandler("dashboard.html"))
 	mux.Handle("/chat", view.NewTemplateHandler("chat.html"))
 	mux.HandleFunc("/room", h.handleRoom)
 	mux.HandleFunc("/health", h.handleHealth)
@@ -15,4 +17,5 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("/api/auth/signin", h.handleSignIn)
 	mux.HandleFunc("/api/auth/signout", h.handleSignOut)
 	mux.HandleFunc("/api/auth/me", h.handleMe)
+	mux.HandleFunc("/api/auth/display-name", h.handleUpdateDisplayName)
 }

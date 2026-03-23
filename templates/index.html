@@ -3,21 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Chat App</title>
+  <title>Sign In | Chat App</title>
   <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
-<body class="index-body">
-  <main class="index-shell">
-    <section class="index-panel auth-panel">
-      <h1>Account Access</h1>
-      <p class="panel-subtitle">Sign in to use your account identity, or continue as a guest.</p>
-
-      <div id="authStatus" class="auth-status">Checking session...</div>
-
-      <div id="authTabs" class="auth-tabs">
-        <button id="showSigninBtn" class="auth-tab active" type="button">Sign In</button>
-        <button id="showSignupBtn" class="auth-tab" type="button">Sign Up</button>
-      </div>
+<body class="auth-page">
+  <main class="auth-shell">
+    <section class="auth-card">
+      <h1>Welcome Back</h1>
+      <p class="auth-subtitle">Sign in to continue to your chat dashboard.</p>
 
       <form id="signinForm" class="auth-form">
         <label for="signinEmail">Email</label>
@@ -27,36 +20,15 @@
         <input id="signinPassword" name="password" type="password" autocomplete="current-password" required />
 
         <button type="submit">Sign In</button>
+
+        <div class="auth-footer-link">
+          <a href="/signup">Sign Up</a>
+        </div>
       </form>
 
-      <form id="signupForm" class="auth-form hidden">
-        <label for="signupName">Display Name (Optional)</label>
-        <input id="signupName" name="display_name" type="text" maxlength="32" autocomplete="nickname" />
-
-        <label for="signupEmail">Email</label>
-        <input id="signupEmail" name="email" type="email" autocomplete="email" required />
-
-        <label for="signupPassword">Password (minimum 8 chars)</label>
-        <input id="signupPassword" name="password" type="password" minlength="8" autocomplete="new-password" required />
-
-        <button type="submit">Create Account</button>
-      </form>
-
-      <button id="signoutBtn" class="secondary-btn hidden" type="button">Sign Out</button>
       <div id="authMessage" class="auth-message" aria-live="polite"></div>
     </section>
-
-    <section class="index-panel join-panel">
-      <h2>Join a Room</h2>
-      <p id="joinModeNote" class="panel-subtitle">Guest mode: you will join with a random name.</p>
-      <form id="joinForm" action="/chat" method="get">
-        <label for="roomInput">Room Name</label>
-        <input id="roomInput" name="room" type="text" placeholder="Enter channel name..." maxlength="64" required />
-        <button type="submit">Join Chat</button>
-      </form>
-    </section>
   </main>
-
-  <script src="/static/js/index.js"></script>
+  <script src="/static/js/signin.js"></script>
 </body>
 </html>

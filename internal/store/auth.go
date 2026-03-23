@@ -123,6 +123,23 @@ func (s *AuthStore) GetUserBySessionHash(ctx context.Context, tokenHash string) 
 	return user, nil
 }
 
+func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID int64, displayName string) (model.User, error) {
+	var user model.User
+	query := `
+		UPDATE users
+		SET display_name = $1, updated_at = NOW()
+		WHERE id = $2
+		RETURNING id, email, display_name, created_at
+	`
+
+	err := s.db.QueryRowContext(ctx, query, displayName, userID).
+		Scan(&user.ID, &user.Email, &user.DisplayName, &user.CreatedAt)
+	if err != nil {
+		return model.User{}, err
+	}
+	return user, nil
+}
+
 func (s *AuthStore) DeleteSession(ctx context.Context, tokenHash string) error {
 	query := `DELETE FROM user_sessions WHERE token_hash = $1`
 	_, err := s.db.ExecContext(ctx, query, tokenHash)

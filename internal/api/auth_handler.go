@@ -23,6 +23,10 @@ type signInRequest struct {
 	Password string `json:"password"`
 }
 
+type updateDisplayNameRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
 type authEnvelope struct {
 	Authenticated bool           `json:"authenticated"`
 	User          *auth.AuthUser `json:"user,omitempty"`
@@ -94,6 +98,8 @@ func (h *Handler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, auth.ErrNoUserFound):
+			writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: err.Error()})
 		default:
@@ -146,6 +152,47 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authEnvelope{
 		Authenticated: true,
 		User:          &user,
+	})
+}
+
+func (h *Handler) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.authService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: "auth service unavailable"})
+		return
+	}
+
+	sessionToken := sessionTokenFromRequest(r)
+	if sessionToken == "" {
+		writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
+		return
+	}
+
+	var req updateDisplayNameRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "invalid request body"})
+		return
+	}
+
+	updatedUser, err := h.authService.HandleUpdateDisplayName(r.Context(), sessionToken, req.DisplayName)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrInvalidDisplayName):
+			writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
+		case errors.Is(err, auth.ErrInvalidCredentials):
+			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "could not update display name"})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, authEnvelope{
+		Authenticated: true,
+		User:          &updatedUser,
 	})
 }
 
