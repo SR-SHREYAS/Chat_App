@@ -1,8 +1,7 @@
-package main
+package chat
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -20,25 +19,22 @@ const (
 	maxMessageSize = 4 * 1024
 )
 
-// client represents a single chatting user
-type client struct {
-	// a socket connection for this user
+// Client represents a single chatting user.
+type Client struct {
 	socket *websocket.Conn
 
-	// receive is a channel to receive messages from other clients
 	receive chan []byte
 
-	room *room
+	room *Room
 
 	name string
 
-	db *sql.DB
+	messages MessageStore
 
 	closeOnce sync.Once
 }
 
-// send message function
-func (c *client) read() {
+func (c *Client) Read() {
 	defer c.closeSocket()
 
 	c.socket.SetReadLimit(maxMessageSize)
@@ -47,7 +43,6 @@ func (c *client) read() {
 		return c.socket.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	// infinite loop, keep reading
 	for {
 		_, msg, err := c.socket.ReadMessage()
 		if err != nil {
@@ -59,12 +54,8 @@ func (c *client) read() {
 			continue
 		}
 
-		// Save to database before forwarding
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err = c.db.ExecContext(ctx, `
-		            INSERT INTO messages (room_name, user_name, message)
-		            VALUES ($1, $2, $3)
-		        `, c.room.name, c.name, cleanMessage)
+		err = c.messages.SaveMessage(ctx, c.room.name, c.name, cleanMessage)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -74,7 +65,6 @@ func (c *client) read() {
 			}
 		}
 
-		// incoming message from the client into json
 		outgoing := map[string]string{
 			"name":    c.name,
 			"message": cleanMessage,
@@ -86,12 +76,11 @@ func (c *client) read() {
 			continue
 		}
 
-		// forward message to the room
 		c.room.forward <- jsMessage
 	}
 }
 
-func (c *client) write() {
+func (c *Client) Write() {
 	defer c.closeSocket()
 
 	ticker := time.NewTicker(pingPeriod)
@@ -116,7 +105,7 @@ func (c *client) write() {
 	}
 }
 
-func (c *client) closeSocket() {
+func (c *Client) closeSocket() {
 	c.closeOnce.Do(func() {
 		_ = c.socket.Close()
 	})
