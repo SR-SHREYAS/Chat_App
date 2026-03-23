@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"real_time_chat_app/internal/api"
+	authapp "real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
 	"real_time_chat_app/internal/middleware"
 	"real_time_chat_app/internal/store"
@@ -45,8 +46,18 @@ func main() {
 	}
 	log.Println("Messages table created or already exists.")
 
+	authCtx, cancelAuth := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelAuth()
+
+	authStore := store.NewAuthStore(db)
+	if err := authStore.EnsureSchema(authCtx); err != nil {
+		log.Fatalf("Could not create auth tables: %v", err)
+	}
+	log.Println("Auth tables created or already exist.")
+
 	service := chat.NewService(messageStore)
-	handler := api.NewHandler(service)
+	authService := authapp.NewService(authStore)
+	handler := api.NewHandler(service, authService)
 
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
