@@ -7,6 +7,7 @@ const saveNameBtn = document.getElementById("saveNameBtn");
 const signoutBtn = document.getElementById("signoutBtn");
 
 const roomInput = document.getElementById("roomInput");
+const ttlMinutesInput = document.getElementById("ttlMinutesInput");
 const createRoomBtn = document.getElementById("createRoomBtn");
 const joinRoomBtn = document.getElementById("joinRoomBtn");
 
@@ -17,11 +18,16 @@ const historyNextBtn = document.getElementById("historyNextBtn");
 
 const dashboardMessage = document.getElementById("dashboardMessage");
 
+const state = {
+  slideIndex: 0,
+  ownedRooms: [],
+};
+
 const slides = [
   {
-    title: "Room History",
-    heading: "Recent Rooms",
-    text: "This section will show joined/owned room history and activity timeline.",
+    title: "Owned Rooms",
+    heading: "Active Signed Rooms",
+    text: "No active signed rooms yet. Create one to start the TTL flow.",
   },
   {
     title: "Room History",
@@ -35,15 +41,62 @@ const slides = [
   },
 ];
 
-let slideIndex = 0;
-
 function setMessage(text, isError = false) {
   dashboardMessage.textContent = text || "";
   dashboardMessage.classList.toggle("error", Boolean(isError && text));
 }
 
-function renderSlide() {
-  const slide = slides[slideIndex];
+function updateDisplayNameUI(name) {
+  displayNameText.textContent = name;
+  displayNameInput.value = name;
+}
+
+function formatExpiry(expiresAt) {
+  const dt = new Date(expiresAt);
+  if (Number.isNaN(dt.getTime())) {
+    return "unknown";
+  }
+  return dt.toLocaleString();
+}
+
+function renderOwnedRoomsSlide() {
+  const slide = slides[0];
+  historyTitle.textContent = slide.title;
+  historySlide.replaceChildren();
+
+  const heading = document.createElement("h3");
+  heading.textContent = slide.heading;
+  historySlide.appendChild(heading);
+
+  if (!state.ownedRooms.length) {
+    const empty = document.createElement("p");
+    empty.textContent = slide.text;
+    historySlide.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "owned-room-list";
+
+  state.ownedRooms.forEach((room) => {
+    const row = document.createElement("div");
+    row.className = "owned-room-item";
+
+    const name = document.createElement("strong");
+    name.textContent = room.room_name;
+
+    const expiry = document.createElement("span");
+    expiry.textContent = `expires ${formatExpiry(room.expires_at)}`;
+
+    row.append(name, expiry);
+    list.appendChild(row);
+  });
+
+  historySlide.appendChild(list);
+}
+
+function renderStaticSlide(index) {
+  const slide = slides[index];
   historyTitle.textContent = slide.title;
   historySlide.replaceChildren();
 
@@ -56,9 +109,12 @@ function renderSlide() {
   historySlide.append(heading, bodyText);
 }
 
-function updateDisplayNameUI(name) {
-  displayNameText.textContent = name;
-  displayNameInput.value = name;
+function renderSlide() {
+  if (state.slideIndex === 0) {
+    renderOwnedRoomsSlide();
+    return;
+  }
+  renderStaticSlide(state.slideIndex);
 }
 
 async function loadSession() {
@@ -75,23 +131,136 @@ async function loadSession() {
     const payload = await res.json();
     if (!payload.authenticated || !payload.user) {
       window.location.href = "/";
-      return;
+      return false;
     }
 
     updateDisplayNameUI(payload.user.display_name);
-  } catch (err) {
+    return true;
+  } catch (_err) {
     window.location.href = "/";
+    return false;
   }
 }
 
-function goToChatRoom() {
-  const room = roomInput.value.trim();
+async function loadOwnedRooms() {
+  try {
+    const res = await fetch("/api/rooms/owned", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not load rooms");
+    }
+
+    state.ownedRooms = Array.isArray(payload.rooms) ? payload.rooms : [];
+    renderSlide();
+  } catch (err) {
+    setMessage(err.message || "Could not load owned rooms", true);
+  }
+}
+
+function normalizeRoomInput() {
+  return roomInput.value.trim();
+}
+
+function parseTTLMinutes() {
+  const raw = String(ttlMinutesInput.value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const minutes = Number.parseInt(raw, 10);
+  if (!Number.isFinite(minutes) || minutes < 1) {
+    return { error: "TTL must be a positive number" };
+  }
+  if (minutes > 10080) {
+    return { error: "TTL cannot exceed 10080 minutes (7 days)" };
+  }
+  return { value: minutes };
+}
+
+async function createSignedRoom() {
+  const room = normalizeRoomInput();
   if (!room) {
     setMessage("Please enter a room name.", true);
     return;
   }
-  const url = `/chat?room=${encodeURIComponent(room)}`;
-  window.location.href = url;
+
+  const ttlParsed = parseTTLMinutes();
+  if (ttlParsed && ttlParsed.error) {
+    setMessage(ttlParsed.error, true);
+    return;
+  }
+
+  const body = { room_name: room };
+  if (ttlParsed && ttlParsed.value) {
+    body.ttl_minutes = ttlParsed.value;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch("/api/rooms/create", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not create room");
+    }
+
+    if (payload.chat_url) {
+      window.location.href = payload.chat_url;
+      return;
+    }
+
+    throw new Error("Missing chat URL in response");
+  } catch (err) {
+    setMessage(err.message || "Could not create room", true);
+  }
+}
+
+async function joinSignedRoom() {
+  const room = normalizeRoomInput();
+  if (!room) {
+    setMessage("Please enter a room name.", true);
+    return;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch("/api/rooms/join", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ room_name: room }),
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not join room");
+    }
+
+    if (payload.chat_url) {
+      window.location.href = payload.chat_url;
+      return;
+    }
+
+    throw new Error("Missing chat URL in response");
+  } catch (err) {
+    setMessage(err.message || "Could not join room", true);
+  }
 }
 
 editNameBtn.addEventListener("click", () => {
@@ -148,23 +317,27 @@ signoutBtn.addEventListener("click", async () => {
   }
 });
 
-createRoomBtn.addEventListener("click", goToChatRoom);
-joinRoomBtn.addEventListener("click", goToChatRoom);
+createRoomBtn.addEventListener("click", createSignedRoom);
+joinRoomBtn.addEventListener("click", joinSignedRoom);
 roomInput.addEventListener("keyup", (event) => {
   if (event.key === "Enter") {
-    goToChatRoom();
+    createSignedRoom();
   }
 });
 
 historyPrevBtn.addEventListener("click", () => {
-  slideIndex = (slideIndex - 1 + slides.length) % slides.length;
+  state.slideIndex = (state.slideIndex - 1 + slides.length) % slides.length;
   renderSlide();
 });
 
 historyNextBtn.addEventListener("click", () => {
-  slideIndex = (slideIndex + 1) % slides.length;
+  state.slideIndex = (state.slideIndex + 1) % slides.length;
   renderSlide();
 });
 
 renderSlide();
-loadSession();
+loadSession().then((ok) => {
+  if (ok) {
+    loadOwnedRooms();
+  }
+});
