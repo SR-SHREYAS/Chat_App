@@ -122,6 +122,31 @@ func TestRoomBroadcastAndPersistenceIntegration(t *testing.T) {
 	})
 }
 
+func TestRoomSendsRecentMessagesOnConnectIntegration(t *testing.T) {
+	const roomName = "history-room"
+	store := newIntegrationMessageStore(map[string][]model.Message{
+		roomName: {
+			{UserName: "user-alpha", Message: "older message"},
+			{UserName: "user-beta", Message: "newer message"},
+		},
+	})
+	server := startTestServer(t, store)
+
+	client := dialRoomSocket(t, server.URL, roomName, "u9")
+	defer client.Close()
+
+	_ = readUntil(t, client, 4*time.Second, func(p chatPayload) bool {
+		return p.Name == "user-alpha" && p.Message == "older message"
+	})
+	_ = readUntil(t, client, 4*time.Second, func(p chatPayload) bool {
+		return p.Name == "user-beta" && p.Message == "newer message"
+	})
+
+	if len(store.SavedMessages()) != 0 {
+		t.Fatalf("expected no saved messages for history replay-only flow")
+	}
+}
+
 func startTestServer(t *testing.T, messageStore *integrationMessageStore) *httptest.Server {
 	t.Helper()
 
