@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard | Chat App</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body class="dashboard-page">
+  <header class="dashboard-header">
+    <div class="user-edit-block">
+      <span class="user-label">Signed in as</span>
+      <div class="user-name-row">
+        <span id="displayNameText" class="display-name">...</span>
+        <button id="editNameBtn" class="inline-btn" type="button">Edit</button>
+      </div>
+      <div id="editNamePanel" class="edit-name-panel hidden">
+        <input id="displayNameInput" type="text" maxlength="32" />
+        <button id="saveNameBtn" type="button">Save</button>
+      </div>
+    </div>
+    <button id="signoutBtn" class="secondary-btn" type="button">Sign Out</button>
+  </header>
+
+  <main class="dashboard-main">
+    <section class="dashboard-card room-action-card">
+      <h1>Create / Join Room</h1>
+      <p class="auth-subtitle">Enter a room name and continue.</p>
+      <div class="room-action-form">
+        <input id="roomInput" type="text" maxlength="64" placeholder="Room name..." />
+        <div class="room-action-buttons">
+          <button id="createRoomBtn" type="button">Create Room</button>
+          <button id="joinRoomBtn" type="button">Join Room</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="dashboard-card history-card">
+      <div class="history-header">
+        <button id="historyPrevBtn" class="inline-btn" type="button">◀</button>
+        <h2 id="historyTitle">Room History</h2>
+        <button id="historyNextBtn" class="inline-btn" type="button">▶</button>
+      </div>
+      <div id="historySlide" class="history-slide">
+        <h3>Recent Rooms</h3>
+        <p>This section will show joined/owned room history and activity timeline.</p>
+      </div>
+      <div class="watermark">UNDER DEVELOPMENT</div>
+    </section>
+  </main>
+
+  <div id="dashboardMessage" class="auth-message dashboard-message" aria-live="polite"></div>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
+

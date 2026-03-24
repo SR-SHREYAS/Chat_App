@@ -26,6 +26,7 @@ const (
 var (
 	ErrInvalidEmail       = errors.New("invalid email")
 	ErrInvalidPassword    = errors.New("invalid password")
+	ErrInvalidDisplayName = errors.New("invalid display name")
 	ErrEmailAlreadyExists = errors.New("email already exists")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 )
@@ -35,6 +36,7 @@ type AuthStore interface {
 	GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error)
 	CreateSession(ctx context.Context, userID int64, tokenHash string, expiresAt time.Time) error
 	GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error)
+	UpdateDisplayName(ctx context.Context, userID int64, displayName string) (model.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteExpiredSessions(ctx context.Context) error
 }
@@ -82,7 +84,7 @@ func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResu
 
 	displayName := normalizeDisplayName(input.DisplayName)
 	if displayName == "" {
-		displayName = defaultDisplayName(email)
+		return AuthResult{}, ErrInvalidDisplayName
 	}
 
 	passwordHash, err := hashPassword(password)
@@ -151,6 +153,33 @@ func (s *Service) HandleSignOut(ctx context.Context, sessionToken string) error 
 	return s.store.DeleteSession(ctx, hashSessionToken(sessionToken))
 }
 
+func (s *Service) HandleUpdateDisplayName(ctx context.Context, sessionToken, displayName string) (AuthUser, error) {
+	sessionToken = strings.TrimSpace(sessionToken)
+	if sessionToken == "" {
+		return AuthUser{}, ErrInvalidCredentials
+	}
+
+	displayName = normalizeDisplayName(displayName)
+	if displayName == "" {
+		return AuthUser{}, ErrInvalidDisplayName
+	}
+
+	user, err := s.store.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AuthUser{}, ErrInvalidCredentials
+		}
+		return AuthUser{}, err
+	}
+
+	updatedUser, err := s.store.UpdateDisplayName(ctx, user.ID, displayName)
+	if err != nil {
+		return AuthUser{}, err
+	}
+
+	return toAuthUser(updatedUser), nil
+}
+
 func (s *Service) createSessionForUser(ctx context.Context, user model.User) (AuthResult, error) {
 	if err := s.store.DeleteExpiredSessions(ctx); err != nil {
 		return AuthResult{}, err
@@ -193,19 +222,6 @@ func normalizeDisplayName(displayName string) string {
 		return string(runes[:maxDisplayNameLen])
 	}
 	return displayName
-}
-
-func defaultDisplayName(email string) string {
-	localPart := strings.SplitN(email, "@", 2)[0]
-	localPart = strings.TrimSpace(localPart)
-	if localPart == "" {
-		return "user"
-	}
-	runes := []rune(localPart)
-	if len(runes) > maxDisplayNameLen {
-		return string(runes[:maxDisplayNameLen])
-	}
-	return localPart
 }
 
 func generateSessionTokenPair() (rawToken, tokenHash string, err error) {

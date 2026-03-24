@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign Up | Chat App</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body class="auth-page">
+  <main class="auth-shell">
+    <section class="auth-card">
+      <h1>Create Account</h1>
+      <p class="auth-subtitle">Set your display name, email, and create password.</p>
+
+      <form id="signupForm" class="auth-form">
+        <label for="signupName">Display Name</label>
+        <input id="signupName" name="display_name" type="text" maxlength="32" autocomplete="nickname" required />
+
+        <label for="signupEmail">Email</label>
+        <input id="signupEmail" name="email" type="email" autocomplete="email" required />
+
+        <label for="signupPassword">Create Password</label>
+        <input id="signupPassword" name="password" type="password" minlength="8" autocomplete="new-password" required />
+
+        <button type="submit">Sign Up</button>
+
+        <div class="auth-footer-link">
+          <a href="/">Sign In</a>
+        </div>
+      </form>
+
+      <div id="authMessage" class="auth-message" aria-live="polite"></div>
+    </section>
+  </main>
+  <script src="/static/js/signup.js"></script>
+</body>
+</html>
+
