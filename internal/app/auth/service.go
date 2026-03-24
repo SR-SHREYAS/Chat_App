@@ -29,7 +29,6 @@ var (
 	ErrInvalidDisplayName = errors.New("invalid display name")
 	ErrEmailAlreadyExists = errors.New("email already exists")
 	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrNoUserFound        = errors.New("no user found")
 )
 
 type AuthStore interface {
@@ -85,7 +84,7 @@ func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResu
 
 	displayName := normalizeDisplayName(input.DisplayName)
 	if displayName == "" {
-		displayName = defaultDisplayName(email)
+		return AuthResult{}, ErrInvalidDisplayName
 	}
 
 	passwordHash, err := hashPassword(password)
@@ -113,7 +112,7 @@ func (s *Service) HandleSignIn(ctx context.Context, input SignInInput) (AuthResu
 	user, storedHash, err := s.store.GetUserCredentialsByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return AuthResult{}, ErrNoUserFound
+			return AuthResult{}, ErrInvalidCredentials
 		}
 		return AuthResult{}, err
 	}
@@ -223,19 +222,6 @@ func normalizeDisplayName(displayName string) string {
 		return string(runes[:maxDisplayNameLen])
 	}
 	return displayName
-}
-
-func defaultDisplayName(email string) string {
-	localPart := strings.SplitN(email, "@", 2)[0]
-	localPart = strings.TrimSpace(localPart)
-	if localPart == "" {
-		return "user"
-	}
-	runes := []rune(localPart)
-	if len(runes) > maxDisplayNameLen {
-		return string(runes[:maxDisplayNameLen])
-	}
-	return localPart
 }
 
 func generateSessionTokenPair() (rawToken, tokenHash string, err error) {

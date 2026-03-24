@@ -45,7 +45,15 @@ function setMessage(text, isError = false) {
 function renderSlide() {
   const slide = slides[slideIndex];
   historyTitle.textContent = slide.title;
-  historySlide.innerHTML = `<h3>${slide.heading}</h3><p>${slide.text}</p>`;
+  historySlide.replaceChildren();
+
+  const heading = document.createElement("h3");
+  heading.textContent = slide.heading;
+
+  const bodyText = document.createElement("p");
+  bodyText.textContent = slide.text;
+
+  historySlide.append(heading, bodyText);
 }
 
 function updateDisplayNameUI(name) {
@@ -160,4 +168,3 @@ historyNextBtn.addEventListener("click", () => {
 
 renderSlide();
 loadSession();
-

@@ -59,7 +59,7 @@ func (h *Handler) handleSignUp(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrInvalidEmail), errors.Is(err, auth.ErrInvalidPassword):
+		case errors.Is(err, auth.ErrInvalidEmail), errors.Is(err, auth.ErrInvalidPassword), errors.Is(err, auth.ErrInvalidDisplayName):
 			writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
 		case errors.Is(err, auth.ErrEmailAlreadyExists):
 			writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
@@ -98,10 +98,8 @@ func (h *Handler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrNoUserFound):
-			writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})
 		case errors.Is(err, auth.ErrInvalidCredentials):
-			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: err.Error()})
+			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: auth.ErrInvalidCredentials.Error()})
 		default:
 			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "could not sign in"})
 		}
