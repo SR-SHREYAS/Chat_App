@@ -84,7 +84,7 @@ func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID 
 	query := `
 		SELECT room_name, owner_user_id, owner_display_name, expires_at, created_at, updated_at
 		FROM signed_rooms
-		WHERE owner_user_id = $1
+		WHERE owner_user_id = $1 AND expires_at > NOW()
 		ORDER BY expires_at DESC, updated_at DESC
 	`
 	rows, err := s.db.QueryContext(ctx, query, ownerUserID)

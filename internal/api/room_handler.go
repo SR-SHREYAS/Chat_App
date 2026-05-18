@@ -55,6 +55,17 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if req.TTLMinutes < 0 {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
+		return
+	}
+
+	maxMinutes := int(chat.MaxSignedRoomTTL / time.Minute)
+	if req.TTLMinutes > maxMinutes {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
+		return
+	}
+
 	ttl := time.Duration(req.TTLMinutes) * time.Minute
 	room, err := h.chatService.HandleCreateSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
 	if err != nil {
