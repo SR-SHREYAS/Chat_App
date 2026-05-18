@@ -23,6 +23,7 @@ const state = {
   slideIndex: 0,
   ownedRooms: [],
   preferredRoomAction: "join",
+  entryCodeLength: 4,
   ttlConfig: {
     defaultMinutes: 10,
     maxMinutes: 10080,
@@ -198,8 +199,9 @@ function normalizeEntryCodeInput() {
 
 function parseEntryCode(raw) {
   const code = String(raw || "").trim();
-  if (!/^\d{4}$/.test(code)) {
-    return { error: "Entry code must be exactly 4 digits" };
+  const pattern = new RegExp(`^\\d{${state.entryCodeLength}}$`);
+  if (!pattern.test(code)) {
+    return { error: `Entry code must be exactly ${state.entryCodeLength} digits` };
   }
   return { value: code };
 }
@@ -218,6 +220,7 @@ async function loadRoomConfig() {
     const payload = await res.json().catch(() => ({}));
     const max = Number.parseInt(payload.max_ttl_minutes, 10);
     const def = Number.parseInt(payload.default_ttl_minutes, 10);
+    const entryCodeLength = Number.parseInt(payload.entry_code_length, 10);
 
     if (Number.isFinite(max) && max > 0) {
       state.ttlConfig.maxMinutes = max;
@@ -226,6 +229,12 @@ async function loadRoomConfig() {
     if (Number.isFinite(def) && def > 0) {
       state.ttlConfig.defaultMinutes = def;
       ttlMinutesInput.placeholder = String(def);
+    }
+    if (Number.isFinite(entryCodeLength) && entryCodeLength > 0) {
+      state.entryCodeLength = entryCodeLength;
+      roomCodeInput.maxLength = entryCodeLength;
+      roomCodeInput.placeholder = `${entryCodeLength}-digit code`;
+      roomCodeInput.pattern = `\\d{${entryCodeLength}}`;
     }
   } catch (_err) {
     // Keep fallback values.

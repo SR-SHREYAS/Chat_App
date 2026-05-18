@@ -22,6 +22,7 @@ const (
 	MessageBufferSize    = 256
 	DefaultSignedRoomTTL = 10 * time.Minute
 	MaxSignedRoomTTL     = 7 * 24 * time.Hour
+	SignedRoomCodeLength = 4
 	signedRoomCleanupTTL = 1 * time.Minute
 )
 
@@ -244,7 +245,7 @@ func normalizeSignedRoomTTL(ttl time.Duration) (time.Duration, error) {
 
 func normalizeRoomEntryCode(entryCode string) (string, error) {
 	code := strings.TrimSpace(entryCode)
-	if len(code) != 4 {
+	if len(code) != SignedRoomCodeLength {
 		return "", ErrInvalidRoomEntryCode
 	}
 	for _, ch := range code {
@@ -256,11 +257,17 @@ func normalizeRoomEntryCode(entryCode string) (string, error) {
 }
 
 func generateRoomEntryCode() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(9000))
+	minValue := int64(1)
+	for i := 1; i < SignedRoomCodeLength; i++ {
+		minValue *= 10
+	}
+	rangeSize := minValue * 9
+
+	n, err := rand.Int(rand.Reader, big.NewInt(rangeSize))
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%04d", n.Int64()+1000), nil
+	return fmt.Sprintf("%0*d", SignedRoomCodeLength, n.Int64()+minValue), nil
 }
 
 func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.Time) error {

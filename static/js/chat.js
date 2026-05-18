@@ -13,6 +13,7 @@ const roomCodeDiv = document.getElementById("roomCode");
 let roomExpiryTime = parseExpiry(params.get("expires_at"));
 let countdownTimer = null;
 let roomExpired = false;
+let entryCodeLength = 4;
 
 const statusDiv = document.createElement("div");
 statusDiv.style.cssText = "position:fixed; top:0; left:0; width:100%; background:rgba(220, 53, 69, 0.9); color:white; text-align:center; padding:10px; display:none; z-index:1000; font-family: Arial, sans-serif; font-weight: bold; transition: all 0.3s ease;";
@@ -35,7 +36,8 @@ function markRoomUnavailable(ttlText, statusMessage) {
 }
 
 function isValidEntryCode(value) {
-  return /^\d{4}$/.test(String(value || "").trim());
+  const pattern = new RegExp(`^\\d{${entryCodeLength}}$`);
+  return pattern.test(String(value || "").trim());
 }
 
 function parseExpiry(raw) {
@@ -116,6 +118,26 @@ function startCountdown() {
   countdownTimer = setInterval(renderTTLCountdown, 1000);
 }
 
+async function loadRoomConfig() {
+  try {
+    const res = await fetch("/api/rooms/config", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      return;
+    }
+    const payload = await res.json().catch(() => ({}));
+    const loadedLength = Number.parseInt(payload.entry_code_length, 10);
+    if (Number.isFinite(loadedLength) && loadedLength > 0) {
+      entryCodeLength = loadedLength;
+    }
+  } catch (_err) {
+    // Keep fallback values.
+  }
+}
+
 async function resolveRoomExpiryFromAPI() {
   if (roomExpiryTime) {
     return;
@@ -173,7 +195,7 @@ function connect() {
     room,
     user_id: userId,
   });
-  if (roomCode) {
+  if (isValidEntryCode(roomCode)) {
     qs.set("code", roomCode);
   }
   socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);
@@ -270,10 +292,12 @@ document.getElementById("msg").addEventListener("keyup", function (event) {
   }
 });
 
-resolveRoomExpiryFromAPI().finally(() => {
-  renderRoomCode();
-  if (roomExpiryTime) {
-    startCountdown();
-  }
-  connect();
+loadRoomConfig().finally(() => {
+  resolveRoomExpiryFromAPI().finally(() => {
+    renderRoomCode();
+    if (roomExpiryTime) {
+      startCountdown();
+    }
+    connect();
+  });
 });

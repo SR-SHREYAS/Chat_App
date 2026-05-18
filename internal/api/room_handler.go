@@ -43,6 +43,7 @@ type signedRoomListEnvelope struct {
 type signedRoomConfigEnvelope struct {
 	DefaultTTLMinutes int `json:"default_ttl_minutes"`
 	MaxTTLMinutes     int `json:"max_ttl_minutes"`
+	EntryCodeLength   int `json:"entry_code_length"`
 }
 
 func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +93,7 @@ func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, signedRoomConfigEnvelope{
 		DefaultTTLMinutes: int(chat.DefaultSignedRoomTTL / time.Minute),
 		MaxTTLMinutes:     int(chat.MaxSignedRoomTTL / time.Minute),
+		EntryCodeLength:   chat.SignedRoomCodeLength,
 	})
 }
 
@@ -175,8 +177,10 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, chat.ErrSignedRoomUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
-	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge), errors.Is(err, chat.ErrInvalidRoomEntryCode):
+	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge):
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
+	case errors.Is(err, chat.ErrInvalidRoomEntryCode):
+		writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomNotFound):
 		writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomExpired):
@@ -235,6 +239,7 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 		query := url.Values{}
 		query.Set("room", room.RoomName)
 		query.Set("expires_at", room.ExpiresAt.UTC().Format(time.RFC3339))
+		// Entry code is part of the shareable chat URL.
 		query.Set("code", room.EntryCode)
 		out.ChatURL = "/chat?" + query.Encode()
 	}
