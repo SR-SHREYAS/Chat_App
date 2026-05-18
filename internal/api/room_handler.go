@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
 	"real_time_chat_app/internal/model"
 	"real_time_chat_app/internal/util"
@@ -161,10 +162,9 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 	}
 }
 
-func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Request) (authUser struct {
-	ID          int64
-	DisplayName string
-}, ok bool) {
+func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Request) (auth.AuthUser, bool) {
+	var authUser auth.AuthUser
+
 	if h.authService == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: "auth service unavailable"})
 		return authUser, false
@@ -180,9 +180,7 @@ func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Reques
 		return authUser, false
 	}
 
-	authUser.ID = resolved.ID
-	authUser.DisplayName = resolved.DisplayName
-	return authUser, true
+	return resolved, true
 }
 
 func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL bool) signedRoomEnvelope {

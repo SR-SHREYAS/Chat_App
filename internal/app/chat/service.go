@@ -143,7 +143,7 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 
 	now := time.Now().UTC()
 	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
-		return model.SignedRoom{}, err
+		log.Printf("Best-effort signed room cleanup failed before create for room %s: %v", roomName, err)
 	}
 
 	expiresAt := now.Add(normalizedTTL)
@@ -181,7 +181,7 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID in
 	}
 
 	if err := s.maybeCleanupExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
-		return nil, err
+		log.Printf("Best-effort signed room cleanup failed before list for owner %d: %v", ownerUserID, err)
 	}
 	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
 }

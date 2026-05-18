@@ -10,6 +10,7 @@ const roomTTLDiv = document.getElementById("roomTTL");
 
 let roomExpiryTime = parseExpiry(params.get("expires_at"));
 let countdownTimer = null;
+let roomExpired = false;
 
 const statusDiv = document.createElement("div");
 statusDiv.style.cssText = "position:fixed; top:0; left:0; width:100%; background:rgba(220, 53, 69, 0.9); color:white; text-align:center; padding:10px; display:none; z-index:1000; font-family: Arial, sans-serif; font-weight: bold; transition: all 0.3s ease;";
@@ -58,6 +59,7 @@ function renderTTLCountdown() {
 
   const remainingSeconds = Math.floor((roomExpiryTime.getTime() - Date.now()) / 1000);
   if (remainingSeconds <= 0) {
+    roomExpired = true;
     roomTTLDiv.classList.remove("hidden");
     roomTTLDiv.textContent = "Room TTL: expired";
     disableInput();
@@ -114,6 +116,10 @@ async function resolveRoomExpiryFromAPI() {
 }
 
 function connect() {
+  if (roomExpired) {
+    return;
+  }
+
   const userId = Math.random().toString(36).substring(2, 9);
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -164,6 +170,12 @@ function connect() {
 
   socket.onclose = (event) => {
     disableInput();
+
+    if (roomExpired) {
+      statusDiv.innerText = "This signed room has expired.";
+      statusDiv.style.display = "block";
+      return;
+    }
 
     const { code, reason, wasClean } = event;
     const nonRetryableCodes = [1000, 1008, 1011];
