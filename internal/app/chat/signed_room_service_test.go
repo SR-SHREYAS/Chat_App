@@ -375,6 +375,34 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 			t.Fatalf("expected ErrInvalidRoomEntryCode, got %v", err)
 		}
 	})
+
+	t.Run("malformed code", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		cases := []string{
+			"",
+			"123",
+			"12345",
+			"12a4",
+			"abcd",
+		}
+
+		for _, entryCode := range cases {
+			if _, err := service.HandleJoinSignedRoom(context.Background(), "alpha", entryCode); !errors.Is(err, ErrInvalidRoomEntryCode) {
+				t.Fatalf("expected ErrInvalidRoomEntryCode for %q, got %v", entryCode, err)
+			}
+		}
+	})
 }
 
 func TestHandleListOwnedSignedRooms(t *testing.T) {

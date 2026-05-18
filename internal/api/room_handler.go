@@ -210,6 +210,12 @@ func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Reques
 }
 
 func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeEntryCode bool) signedRoomEnvelope {
+	// A chat URL for signed rooms requires the entry code; enforce this to
+	// avoid any future caller accidentally leaking it via URL only.
+	if includeChatURL {
+		includeEntryCode = true
+	}
+
 	expiresIn := int64(time.Until(room.ExpiresAt).Seconds())
 	if expiresIn < 0 {
 		expiresIn = 0
