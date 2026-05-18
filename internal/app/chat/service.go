@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -19,6 +20,7 @@ const (
 	MessageBufferSize    = 256
 	DefaultSignedRoomTTL = 10 * time.Minute
 	MaxSignedRoomTTL     = 7 * 24 * time.Hour
+	signedRoomCleanupTTL = 1 * time.Minute
 )
 
 var (
@@ -26,6 +28,7 @@ var (
 	ErrInvalidRoomName        = errors.New("invalid room name")
 	ErrInvalidRoomOwner       = errors.New("invalid room owner")
 	ErrInvalidRoomTTL         = errors.New("invalid room ttl")
+	ErrSignedRoomTTLTooLarge  = errors.New("signed room ttl exceeds maximum")
 	ErrSignedRoomNotFound     = errors.New("signed room not found")
 	ErrSignedRoomExpired      = errors.New("signed room expired")
 	ErrRoomOwnedByAnotherUser = errors.New("room is owned by another user")
@@ -50,12 +53,17 @@ type Service struct {
 	rooms     *Registry
 	store     MessageStore
 	roomStore SignedRoomStore
+
+	cleanupMu              sync.Mutex
+	lastSignedRoomCleanup  time.Time
+	signedRoomCleanupEvery time.Duration
 }
 
 func NewService(store MessageStore) *Service {
 	return &Service{
-		rooms: NewRegistry(),
-		store: store,
+		rooms:                  NewRegistry(),
+		store:                  store,
+		signedRoomCleanupEvery: signedRoomCleanupTTL,
 	}
 }
 
@@ -129,17 +137,17 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 		return model.SignedRoom{}, ErrInvalidRoomOwner
 	}
 
-	ttl = normalizeSignedRoomTTL(ttl)
-	if ttl <= 0 {
-		return model.SignedRoom{}, ErrInvalidRoomTTL
-	}
-
-	now := time.Now().UTC()
-	if _, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now); err != nil {
+	normalizedTTL, err := normalizeSignedRoomTTL(ttl)
+	if err != nil {
 		return model.SignedRoom{}, err
 	}
 
-	expiresAt := now.Add(ttl)
+	now := time.Now().UTC()
+	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
+		return model.SignedRoom{}, err
+	}
+
+	expiresAt := now.Add(normalizedTTL)
 	existing, err := s.roomStore.GetSignedRoomByName(ctx, roomName)
 	if err == nil {
 		if existing.OwnerUserID != ownerUserID {
@@ -173,7 +181,7 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID in
 		return nil, ErrInvalidRoomOwner
 	}
 
-	if _, err := s.roomStore.DeleteExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
+	if err := s.maybeCleanupExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
@@ -206,12 +214,38 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomName string
 	return room, true, nil
 }
 
-func normalizeSignedRoomTTL(ttl time.Duration) time.Duration {
+func normalizeSignedRoomTTL(ttl time.Duration) (time.Duration, error) {
 	if ttl <= 0 {
-		return DefaultSignedRoomTTL
+		return DefaultSignedRoomTTL, nil
 	}
 	if ttl > MaxSignedRoomTTL {
-		return 0
+		return 0, ErrSignedRoomTTLTooLarge
 	}
-	return ttl
+	return ttl, nil
+}
+
+func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.Time) error {
+	if s.signedRoomCleanupEvery <= 0 {
+		_, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+		return err
+	}
+
+	s.cleanupMu.Lock()
+	shouldRun := s.lastSignedRoomCleanup.IsZero() || now.Sub(s.lastSignedRoomCleanup) >= s.signedRoomCleanupEvery
+	if shouldRun {
+		s.lastSignedRoomCleanup = now
+	}
+	s.cleanupMu.Unlock()
+
+	if !shouldRun {
+		return nil
+	}
+
+	if _, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now); err != nil {
+		s.cleanupMu.Lock()
+		s.lastSignedRoomCleanup = time.Time{}
+		s.cleanupMu.Unlock()
+		return err
+	}
+	return nil
 }
