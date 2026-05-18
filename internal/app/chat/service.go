@@ -27,7 +27,6 @@ var (
 	ErrSignedRoomUnavailable  = errors.New("signed room service unavailable")
 	ErrInvalidRoomName        = errors.New("invalid room name")
 	ErrInvalidRoomOwner       = errors.New("invalid room owner")
-	ErrInvalidRoomTTL         = errors.New("invalid room ttl")
 	ErrSignedRoomTTLTooLarge  = errors.New("signed room ttl exceeds maximum")
 	ErrSignedRoomNotFound     = errors.New("signed room not found")
 	ErrSignedRoomExpired      = errors.New("signed room expired")
@@ -207,7 +206,9 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomName string
 
 	now := time.Now().UTC()
 	if !room.ExpiresAt.After(now) {
-		_ = s.roomStore.DeleteSignedRoomByName(ctx, roomName)
+		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
+			log.Printf("Could not delete expired signed room %s: %v", roomName, err)
+		}
 		return model.SignedRoom{}, false, ErrSignedRoomExpired
 	}
 

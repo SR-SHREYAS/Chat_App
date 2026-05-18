@@ -148,7 +148,7 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, chat.ErrSignedRoomUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
-	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrInvalidRoomTTL), errors.Is(err, chat.ErrSignedRoomTTLTooLarge):
+	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge):
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomNotFound):
 		writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})

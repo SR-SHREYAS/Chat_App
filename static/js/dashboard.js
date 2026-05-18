@@ -21,6 +21,7 @@ const dashboardMessage = document.getElementById("dashboardMessage");
 const state = {
   slideIndex: 0,
   ownedRooms: [],
+  preferredRoomAction: "join",
 };
 
 const slides = [
@@ -263,6 +264,14 @@ async function joinSignedRoom() {
   }
 }
 
+function runPreferredRoomAction() {
+  if (state.preferredRoomAction === "create") {
+    createSignedRoom();
+    return;
+  }
+  joinSignedRoom();
+}
+
 editNameBtn.addEventListener("click", () => {
   editNamePanel.classList.toggle("hidden");
   if (!editNamePanel.classList.contains("hidden")) {
@@ -317,11 +326,19 @@ signoutBtn.addEventListener("click", async () => {
   }
 });
 
-createRoomBtn.addEventListener("click", createSignedRoom);
-joinRoomBtn.addEventListener("click", joinSignedRoom);
+createRoomBtn.addEventListener("click", () => {
+  state.preferredRoomAction = "create";
+  createSignedRoom();
+});
+
+joinRoomBtn.addEventListener("click", () => {
+  state.preferredRoomAction = "join";
+  joinSignedRoom();
+});
+
 roomInput.addEventListener("keyup", (event) => {
   if (event.key === "Enter") {
-    createSignedRoom();
+    runPreferredRoomAction();
   }
 });
 
