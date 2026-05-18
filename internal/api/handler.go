@@ -70,6 +70,24 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Sign-in required for this room", http.StatusUnauthorized)
 			return
 		}
+		entryCode := r.URL.Query().Get("code")
+		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, entryCode); err != nil {
+			if errors.Is(err, chat.ErrInvalidRoomEntryCode) {
+				http.Error(w, "Invalid room entry code", http.StatusForbidden)
+				return
+			}
+			if errors.Is(err, chat.ErrSignedRoomExpired) {
+				http.Error(w, "Room expired", http.StatusGone)
+				return
+			}
+			if errors.Is(err, chat.ErrSignedRoomNotFound) {
+				http.Error(w, "Room not found", http.StatusNotFound)
+				return
+			}
+			log.Printf("Could not validate signed room entry for room %s: %v", roomName, err)
+			http.Error(w, "Room access denied", http.StatusForbidden)
+			return
+		}
 	}
 
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)

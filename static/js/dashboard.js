@@ -7,6 +7,7 @@ const saveNameBtn = document.getElementById("saveNameBtn");
 const signoutBtn = document.getElementById("signoutBtn");
 
 const roomInput = document.getElementById("roomInput");
+const roomCodeInput = document.getElementById("roomCodeInput");
 const ttlMinutesInput = document.getElementById("ttlMinutesInput");
 const createRoomBtn = document.getElementById("createRoomBtn");
 const joinRoomBtn = document.getElementById("joinRoomBtn");
@@ -93,7 +94,11 @@ function renderOwnedRoomsSlide() {
     const expiry = document.createElement("span");
     expiry.textContent = `expires ${formatExpiry(room.expires_at)}`;
 
-    row.append(name, expiry);
+    const code = document.createElement("span");
+    code.className = "entry-code-badge";
+    code.textContent = `code ${room.entry_code || "----"}`;
+
+    row.append(name, code, expiry);
     list.appendChild(row);
   });
 
@@ -187,6 +192,18 @@ function parseTTLMinutes() {
   return { value: minutes };
 }
 
+function normalizeEntryCodeInput() {
+  return String(roomCodeInput.value || "").trim();
+}
+
+function parseEntryCode(raw) {
+  const code = String(raw || "").trim();
+  if (!/^\d{4}$/.test(code)) {
+    return { error: "Entry code must be exactly 4 digits" };
+  }
+  return { value: code };
+}
+
 async function loadRoomConfig() {
   try {
     const res = await fetch("/api/rooms/config", {
@@ -251,6 +268,9 @@ async function createSignedRoom() {
     }
 
     if (payload.chat_url) {
+      if (payload.entry_code) {
+        roomCodeInput.value = payload.entry_code;
+      }
       window.location.href = payload.chat_url;
       return;
     }
@@ -267,6 +287,11 @@ async function joinSignedRoom() {
     setMessage("Please enter a room name.", true);
     return;
   }
+  const codeParsed = parseEntryCode(normalizeEntryCodeInput());
+  if (codeParsed.error) {
+    setMessage(codeParsed.error, true);
+    return;
+  }
 
   setMessage("");
   try {
@@ -277,7 +302,7 @@ async function joinSignedRoom() {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ room_name: room }),
+      body: JSON.stringify({ room_name: room, entry_code: codeParsed.value }),
     });
 
     const payload = await res.json().catch(() => ({}));
@@ -369,6 +394,12 @@ joinRoomBtn.addEventListener("click", () => {
 });
 
 roomInput.addEventListener("keyup", (event) => {
+  if (event.key === "Enter") {
+    runPreferredRoomAction();
+  }
+});
+
+roomCodeInput.addEventListener("keyup", (event) => {
   if (event.key === "Enter") {
     runPreferredRoomAction();
   }

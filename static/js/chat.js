@@ -1,5 +1,6 @@
 const params = new URLSearchParams(window.location.search);
 const room = params.get("room");
+const roomCode = String(params.get("code") || "").trim();
 
 if (!room) {
   alert("No room specified. Redirecting to homepage...");
@@ -7,6 +8,7 @@ if (!room) {
 }
 
 const roomTTLDiv = document.getElementById("roomTTL");
+const roomCodeDiv = document.getElementById("roomCode");
 
 let roomExpiryTime = parseExpiry(params.get("expires_at"));
 let countdownTimer = null;
@@ -57,6 +59,18 @@ function formatRemaining(totalSeconds) {
 function disableInput() {
   document.getElementById("msg").disabled = true;
   document.getElementById("sendBtn").disabled = true;
+}
+
+function renderRoomCode() {
+  if (!roomCodeDiv) {
+    return;
+  }
+  if (!/^\d{4}$/.test(roomCode)) {
+    roomCodeDiv.classList.add("hidden");
+    return;
+  }
+  roomCodeDiv.classList.remove("hidden");
+  roomCodeDiv.textContent = `Entry code: ${roomCode}`;
 }
 
 function enableInput() {
@@ -126,6 +140,10 @@ async function resolveRoomExpiryFromAPI() {
 
     const payload = await res.json();
     if (payload.exists && payload.room && payload.room.expires_at) {
+      if (!/^\d{4}$/.test(roomCode)) {
+        markRoomUnavailable("Room TTL: restricted", "Entry code required to access this room.");
+        return;
+      }
       const resolvedExpiry = parseExpiry(payload.room.expires_at);
       if (resolvedExpiry && resolvedExpiry.getTime() <= Date.now()) {
         markRoomUnavailable("Room TTL: expired", "This room has expired.");
@@ -147,7 +165,14 @@ function connect() {
   const userId = Math.random().toString(36).substring(2, 9);
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room?room=${encodeURIComponent(room)}&user_id=${encodeURIComponent(userId)}`);
+  const qs = new URLSearchParams({
+    room,
+    user_id: userId,
+  });
+  if (roomCode) {
+    qs.set("code", roomCode);
+  }
+  socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);
 
   socket.onopen = () => {
     console.log("WebSocket connection established.");
@@ -242,6 +267,7 @@ document.getElementById("msg").addEventListener("keyup", function (event) {
 });
 
 resolveRoomExpiryFromAPI().finally(() => {
+  renderRoomCode();
   if (roomExpiryTime) {
     startCountdown();
   }
