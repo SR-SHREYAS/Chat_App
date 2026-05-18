@@ -24,6 +24,14 @@ function showStatus(message) {
   statusDiv.style.display = "block";
 }
 
+function markRoomUnavailable(ttlText, statusMessage) {
+  roomExpired = true;
+  roomTTLDiv.classList.remove("hidden");
+  roomTTLDiv.textContent = ttlText;
+  disableInput();
+  showStatus(statusMessage);
+}
+
 function parseExpiry(raw) {
   if (!raw) {
     return null;
@@ -64,11 +72,7 @@ function renderTTLCountdown() {
 
   const remainingSeconds = Math.floor((roomExpiryTime.getTime() - Date.now()) / 1000);
   if (remainingSeconds <= 0) {
-    roomExpired = true;
-    roomTTLDiv.classList.remove("hidden");
-    roomTTLDiv.textContent = "Room TTL: expired";
-    disableInput();
-    showStatus("This signed room has expired.");
+    markRoomUnavailable("Room TTL: expired", "This signed room has expired.");
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.close(1000, "room expired");
     }
@@ -105,21 +109,14 @@ async function resolveRoomExpiryFromAPI() {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     });
+
+    // For guests/non-signed rooms, TTL metadata can be unavailable; do not block chat.
     if (res.status === 401 || res.status === 403) {
-      roomExpired = true;
-      roomTTLDiv.classList.remove("hidden");
-      roomTTLDiv.textContent = "Room TTL: restricted";
-      disableInput();
-      showStatus("Sign-in required to access this room.");
       return;
     }
 
     if (res.status === 404 || res.status === 410) {
-      roomExpired = true;
-      roomTTLDiv.classList.remove("hidden");
-      roomTTLDiv.textContent = "Room TTL: expired";
-      disableInput();
-      showStatus("This room has expired or does not exist.");
+      markRoomUnavailable("Room TTL: expired", "This room has expired or does not exist.");
       return;
     }
 
@@ -131,11 +128,7 @@ async function resolveRoomExpiryFromAPI() {
     if (payload.exists && payload.room && payload.room.expires_at) {
       const resolvedExpiry = parseExpiry(payload.room.expires_at);
       if (resolvedExpiry && resolvedExpiry.getTime() <= Date.now()) {
-        roomExpired = true;
-        roomTTLDiv.classList.remove("hidden");
-        roomTTLDiv.textContent = "Room TTL: expired";
-        disableInput();
-        showStatus("This room has expired.");
+        markRoomUnavailable("Room TTL: expired", "This room has expired.");
         return;
       }
       roomExpiryTime = resolvedExpiry;

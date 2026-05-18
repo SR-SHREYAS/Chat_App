@@ -147,17 +147,13 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := h.requireAuthenticatedUser(w, r); !ok {
-		return
-	}
+
+	// This endpoint is used by chat clients (including guests) to resolve
+	// whether a room has signed-room TTL metadata. Keep it unauthenticated.
 
 	roomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
 	room, exists, err := h.chatService.HandleGetSignedRoomStatus(r.Context(), roomName)
 	if err != nil {
-		if errors.Is(err, chat.ErrSignedRoomExpired) {
-			writeJSON(w, http.StatusOK, signedRoomStatusEnvelope{Exists: false})
-			return
-		}
 		h.writeSignedRoomError(w, err)
 		return
 	}
