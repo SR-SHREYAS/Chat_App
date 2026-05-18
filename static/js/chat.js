@@ -6,35 +6,160 @@ if (!room) {
   window.location.href = "/";
 }
 
-// Create a status banner for connection updates
+const roomTTLDiv = document.getElementById("roomTTL");
+
+let roomExpiryTime = parseExpiry(params.get("expires_at"));
+let countdownTimer = null;
+let roomExpired = false;
+
 const statusDiv = document.createElement("div");
 statusDiv.style.cssText = "position:fixed; top:0; left:0; width:100%; background:rgba(220, 53, 69, 0.9); color:white; text-align:center; padding:10px; display:none; z-index:1000; font-family: Arial, sans-serif; font-weight: bold; transition: all 0.3s ease;";
 document.body.appendChild(statusDiv);
 
 let socket;
-let retryTimeout = 1000; // Start with a 1-second retry delay
+let retryTimeout = 1000;
+
+function showStatus(message) {
+  statusDiv.innerText = message;
+  statusDiv.style.display = "block";
+}
+
+function markRoomUnavailable(ttlText, statusMessage) {
+  roomExpired = true;
+  roomTTLDiv.classList.remove("hidden");
+  roomTTLDiv.textContent = ttlText;
+  disableInput();
+  showStatus(statusMessage);
+}
+
+function parseExpiry(raw) {
+  if (!raw) {
+    return null;
+  }
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) {
+    return null;
+  }
+  return dt;
+}
+
+function formatRemaining(totalSeconds) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, "0")}m ${seconds.toString().padStart(2, "0")}s`;
+  }
+  return `${minutes.toString().padStart(2, "0")}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function disableInput() {
+  document.getElementById("msg").disabled = true;
+  document.getElementById("sendBtn").disabled = true;
+}
+
+function enableInput() {
+  document.getElementById("msg").disabled = false;
+  document.getElementById("sendBtn").disabled = false;
+}
+
+function renderTTLCountdown() {
+  if (!roomExpiryTime) {
+    roomTTLDiv.classList.add("hidden");
+    return;
+  }
+
+  const remainingSeconds = Math.floor((roomExpiryTime.getTime() - Date.now()) / 1000);
+  if (remainingSeconds <= 0) {
+    markRoomUnavailable("Room TTL: expired", "This signed room has expired.");
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.close(1000, "room expired");
+    }
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+    return;
+  }
+
+  roomTTLDiv.classList.remove("hidden");
+  roomTTLDiv.textContent = `Room TTL: ${formatRemaining(remainingSeconds)}`;
+}
+
+function startCountdown() {
+  if (!roomExpiryTime) {
+    return;
+  }
+  renderTTLCountdown();
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+  }
+  countdownTimer = setInterval(renderTTLCountdown, 1000);
+}
+
+async function resolveRoomExpiryFromAPI() {
+  if (roomExpiryTime) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/rooms/status?room=${encodeURIComponent(room)}`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+
+    // For guests/non-signed rooms, TTL metadata can be unavailable; do not block chat.
+    if (res.status === 401 || res.status === 403) {
+      return;
+    }
+
+    if (res.status === 404 || res.status === 410) {
+      markRoomUnavailable("Room TTL: expired", "This room has expired or does not exist.");
+      return;
+    }
+
+    if (!res.ok) {
+      return;
+    }
+
+    const payload = await res.json();
+    if (payload.exists && payload.room && payload.room.expires_at) {
+      const resolvedExpiry = parseExpiry(payload.room.expires_at);
+      if (resolvedExpiry && resolvedExpiry.getTime() <= Date.now()) {
+        markRoomUnavailable("Room TTL: expired", "This room has expired.");
+        return;
+      }
+      roomExpiryTime = resolvedExpiry;
+      startCountdown();
+    }
+  } catch (_err) {
+    // If status cannot be resolved, chat can still continue as non-TTL room flow.
+  }
+}
 
 function connect() {
-  // Generate a simple random ID for the user for this session
+  if (roomExpired) {
+    return;
+  }
+
   const userId = Math.random().toString(36).substring(2, 9);
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room?room=${room}&user_id=${userId}`);
+  socket = new WebSocket(`${protocol}//${location.host}/room?room=${encodeURIComponent(room)}&user_id=${encodeURIComponent(userId)}`);
 
   socket.onopen = () => {
     console.log("WebSocket connection established.");
-    // Reset the retry timeout on a successful connection
     retryTimeout = 1000;
     statusDiv.style.display = "none";
-    document.getElementById("msg").disabled = false;
-    document.getElementById("sendBtn").disabled = false;
+    enableInput();
   };
 
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
 
-      // Handle System messages differently
       if (data.name === "System") {
         const sysDiv = document.createElement("div");
         sysDiv.classList.add("system-message");
@@ -45,28 +170,21 @@ function connect() {
         return;
       }
 
-      // Create the container div
       const msgContainer = document.createElement("div");
       msgContainer.classList.add("message-container");
 
-      // Create the username div
       const usernameDiv = document.createElement("div");
       usernameDiv.classList.add("username");
       usernameDiv.textContent = data.name;
 
-      // Create the message div
       const messageDiv = document.createElement("div");
       messageDiv.classList.add("message");
       messageDiv.textContent = data.message;
 
-      // Append username and message in correct order
       msgContainer.appendChild(usernameDiv);
       msgContainer.appendChild(messageDiv);
-
-      // Append the whole message container to the messages div
       document.getElementById("messages").appendChild(msgContainer);
 
-      // Auto-scroll
       const messagesDiv = document.getElementById("messages");
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     } catch (err) {
@@ -75,32 +193,29 @@ function connect() {
   };
 
   socket.onclose = (event) => {
-    document.getElementById("msg").disabled = true;
-    document.getElementById("sendBtn").disabled = true;
+    disableInput();
+
+    if (roomExpired) {
+      showStatus("This signed room has expired.");
+      return;
+    }
 
     const { code, reason, wasClean } = event;
-    // 1000: Normal Closure, 1008: Policy Violation, 1011: Internal Error
     const nonRetryableCodes = [1000, 1008, 1011];
 
     if (wasClean || nonRetryableCodes.includes(code)) {
-      statusDiv.innerText = "Connection closed. Please refresh the page to reconnect.";
-      statusDiv.style.display = "block";
+      showStatus("Connection closed. Please refresh the page to reconnect.");
       return;
     }
 
     console.log(`WebSocket disconnected (code: ${code}, reason: "${reason || "none"}"). Retrying in ${retryTimeout / 1000}s...`);
-    statusDiv.innerText = `Connection lost. Reconnecting in ${retryTimeout / 1000}s...`;
-    statusDiv.style.display = "block";
-    // Schedule the next reconnection attempt
+    showStatus(`Connection lost. Reconnecting in ${retryTimeout / 1000}s...`);
     setTimeout(connect, retryTimeout);
-    // Implement exponential backoff: double the delay each time, up to a max
-    retryTimeout = Math.min(retryTimeout * 2, 30000); // Cap at 30 seconds
+    retryTimeout = Math.min(retryTimeout * 2, 30000);
   };
 
   socket.onerror = (error) => {
     console.error("WebSocket error:", error);
-    // The 'onclose' event will fire automatically after an error,
-    // which will trigger the reconnection logic.
     socket.close();
   };
 }
@@ -114,8 +229,7 @@ function sendMessage() {
     }
   } else {
     console.error("Cannot send message: WebSocket is not open.");
-    statusDiv.innerText = "Message not sent. You are currently disconnected.";
-    statusDiv.style.display = "block";
+    showStatus("Message not sent. You are currently disconnected.");
   }
 }
 
@@ -127,5 +241,9 @@ document.getElementById("msg").addEventListener("keyup", function (event) {
   }
 });
 
-// Initial connection attempt
-connect();
+resolveRoomExpiryFromAPI().finally(() => {
+  if (roomExpiryTime) {
+    startCountdown();
+  }
+  connect();
+});

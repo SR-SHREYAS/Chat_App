@@ -65,6 +65,11 @@ body {
   color: var(--text-muted);
 }
 
+.tiny-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .auth-form input,
 .room-action-form input,
 .chat-input input[type="text"] {
@@ -267,6 +272,23 @@ body {
   line-height: 1.45;
 }
 
+.owned-room-list {
+  display: grid;
+  gap: 8px;
+}
+
+.owned-room-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #d5e2ea;
+  font-size: 13px;
+}
+
 .watermark {
   position: absolute;
   right: -26px;
@@ -298,10 +320,18 @@ body {
 header {
   background: linear-gradient(120deg, #12384a, #1c5a72);
   color: #fff;
-  padding: 12px;
+  padding: 10px 12px;
   text-align: center;
   font-size: 22px;
   font-weight: 800;
+  display: grid;
+  gap: 4px;
+}
+
+.room-ttl {
+  font-size: 13px;
+  font-weight: 700;
+  color: #dff6ff;
 }
 
 #messages {

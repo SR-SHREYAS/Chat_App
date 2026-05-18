@@ -28,6 +28,8 @@
       <p class="auth-subtitle">Enter a room name and continue.</p>
       <div class="room-action-form">
         <input id="roomInput" type="text" maxlength="64" placeholder="Room name..." />
+        <label for="ttlMinutesInput" class="tiny-label">Room TTL (minutes, default 10)</label>
+        <input id="ttlMinutesInput" type="number" min="1" placeholder="10" />
         <div class="room-action-buttons">
           <button id="createRoomBtn" type="button">Create Room</button>
           <button id="joinRoomBtn" type="button">Join Room</button>
@@ -53,4 +55,3 @@
   <script src="/static/js/dashboard.js"></script>
 </body>
 </html>
-

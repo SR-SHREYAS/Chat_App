@@ -55,7 +55,17 @@ func main() {
 	}
 	log.Println("Auth tables created or already exist.")
 
+	roomsCtx, cancelRooms := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelRooms()
+
+	signedRoomStore := store.NewSignedRoomStore(db)
+	if err := signedRoomStore.EnsureSchema(roomsCtx); err != nil {
+		log.Fatalf("Could not create signed room tables: %v", err)
+	}
+	log.Println("Signed room tables created or already exist.")
+
 	service := chat.NewService(messageStore)
+	service.BindSignedRoomStore(signedRoomStore)
 	authService := authapp.NewService(authStore)
 	handler := api.NewHandler(service, authService)
 

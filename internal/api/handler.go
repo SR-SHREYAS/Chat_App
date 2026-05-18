@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -38,19 +39,47 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var (
+		authUser auth.AuthUser
+		isAuth   bool
+	)
+	if h.authService != nil {
+		resolved, ok, err := h.resolveAuthenticatedUser(r)
+		if err != nil {
+			log.Printf("Could not resolve authenticated user: %v", err)
+		} else if ok {
+			authUser = resolved
+			isAuth = true
+		}
+	}
+
+	_, hasSignedRoom, err := h.chatService.HandleGetSignedRoomStatus(r.Context(), roomName)
+	if err != nil {
+		switch {
+		case errors.Is(err, chat.ErrSignedRoomExpired):
+			http.Error(w, "Room expired", http.StatusGone)
+			return
+		case errors.Is(err, chat.ErrSignedRoomUnavailable):
+			log.Printf("Signed room service unavailable: %v", err)
+		default:
+			log.Printf("Could not resolve signed room status: %v", err)
+		}
+	}
+	if hasSignedRoom {
+		if !isAuth {
+			http.Error(w, "Sign-in required for this room", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
 	if userID == "" {
 		userID = randomGuestID()
 	}
 
 	userName := ""
-	if h.authService != nil {
-		authUser, ok, err := h.resolveAuthenticatedUser(r)
-		if err != nil {
-			log.Printf("Could not resolve authenticated user: %v", err)
-		} else if ok {
-			userName = authUser.DisplayName
-		}
+	if isAuth {
+		userName = authUser.DisplayName
 	}
 
 	socket, err := h.upgrader.Upgrade(w, r, nil)
