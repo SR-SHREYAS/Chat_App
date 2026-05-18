@@ -22,18 +22,21 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) error {
 		room_name VARCHAR(64) PRIMARY KEY,
 		owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		owner_display_name VARCHAR(64) NOT NULL,
-		entry_code VARCHAR(4) NOT NULL DEFAULT '0000',
+		entry_code VARCHAR(4) NOT NULL,
 		expires_at TIMESTAMPTZ NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 
 	ALTER TABLE signed_rooms
-		ADD COLUMN IF NOT EXISTS entry_code VARCHAR(4) NOT NULL DEFAULT '0000';
+		ADD COLUMN IF NOT EXISTS entry_code VARCHAR(4);
 
 	UPDATE signed_rooms
 	SET entry_code = LPAD((1000 + FLOOR(RANDOM() * 9000))::INT::TEXT, 4, '0')
-	WHERE entry_code IS NULL OR entry_code = '' OR entry_code = '0000';
+	WHERE entry_code IS NULL OR entry_code !~ '^[0-9]{4}$';
+
+	ALTER TABLE signed_rooms
+		ALTER COLUMN entry_code SET NOT NULL;
 
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_owner_user_id ON signed_rooms(owner_user_id);
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at ON signed_rooms(expires_at);

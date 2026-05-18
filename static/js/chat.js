@@ -34,6 +34,10 @@ function markRoomUnavailable(ttlText, statusMessage) {
   showStatus(statusMessage);
 }
 
+function isValidEntryCode(value) {
+  return /^\d{4}$/.test(String(value || "").trim());
+}
+
 function parseExpiry(raw) {
   if (!raw) {
     return null;
@@ -65,7 +69,7 @@ function renderRoomCode() {
   if (!roomCodeDiv) {
     return;
   }
-  if (!/^\d{4}$/.test(roomCode)) {
+  if (!isValidEntryCode(roomCode)) {
     roomCodeDiv.classList.add("hidden");
     return;
   }
@@ -140,7 +144,7 @@ async function resolveRoomExpiryFromAPI() {
 
     const payload = await res.json();
     if (payload.exists && payload.room && payload.room.expires_at) {
-      if (!/^\d{4}$/.test(roomCode)) {
+      if (!isValidEntryCode(roomCode)) {
         markRoomUnavailable("Room TTL: restricted", "Entry code required to access this room.");
         return;
       }
