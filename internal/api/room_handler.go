@@ -38,6 +38,11 @@ type signedRoomListEnvelope struct {
 	Rooms []signedRoomEnvelope `json:"rooms"`
 }
 
+type signedRoomConfigEnvelope struct {
+	DefaultTTLMinutes int `json:"default_ttl_minutes"`
+	MaxTTLMinutes     int `json:"max_ttl_minutes"`
+}
+
 func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -56,7 +61,7 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.TTLMinutes < 0 {
-		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ttl must be non-negative"})
 		return
 	}
 
@@ -74,6 +79,18 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusCreated, signedRoomEnvelopeFromModel(room, true))
+}
+
+func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, signedRoomConfigEnvelope{
+		DefaultTTLMinutes: int(chat.DefaultSignedRoomTTL / time.Minute),
+		MaxTTLMinutes:     int(chat.MaxSignedRoomTTL / time.Minute),
+	})
 }
 
 func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {

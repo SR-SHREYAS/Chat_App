@@ -22,6 +22,10 @@ const state = {
   slideIndex: 0,
   ownedRooms: [],
   preferredRoomAction: "join",
+  ttlConfig: {
+    defaultMinutes: 10,
+    maxMinutes: 10080,
+  },
 };
 
 const slides = [
@@ -177,10 +181,38 @@ function parseTTLMinutes() {
   if (!Number.isFinite(minutes) || minutes < 1) {
     return { error: "TTL must be a positive number" };
   }
-  if (minutes > 10080) {
-    return { error: "TTL cannot exceed 10080 minutes (7 days)" };
+  if (minutes > state.ttlConfig.maxMinutes) {
+    return { error: `TTL cannot exceed ${state.ttlConfig.maxMinutes} minutes` };
   }
   return { value: minutes };
+}
+
+async function loadRoomConfig() {
+  try {
+    const res = await fetch("/api/rooms/config", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      return;
+    }
+
+    const payload = await res.json().catch(() => ({}));
+    const max = Number.parseInt(payload.max_ttl_minutes, 10);
+    const def = Number.parseInt(payload.default_ttl_minutes, 10);
+
+    if (Number.isFinite(max) && max > 0) {
+      state.ttlConfig.maxMinutes = max;
+      ttlMinutesInput.max = String(max);
+    }
+    if (Number.isFinite(def) && def > 0) {
+      state.ttlConfig.defaultMinutes = def;
+      ttlMinutesInput.placeholder = String(def);
+    }
+  } catch (_err) {
+    // Keep fallback values.
+  }
 }
 
 async function createSignedRoom() {
@@ -353,6 +385,7 @@ historyNextBtn.addEventListener("click", () => {
 });
 
 renderSlide();
+loadRoomConfig();
 loadSession().then((ok) => {
   if (ok) {
     loadOwnedRooms();

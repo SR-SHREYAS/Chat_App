@@ -19,6 +19,11 @@ document.body.appendChild(statusDiv);
 let socket;
 let retryTimeout = 1000;
 
+function showStatus(message) {
+  statusDiv.innerText = message;
+  statusDiv.style.display = "block";
+}
+
 function parseExpiry(raw) {
   if (!raw) {
     return null;
@@ -63,8 +68,7 @@ function renderTTLCountdown() {
     roomTTLDiv.classList.remove("hidden");
     roomTTLDiv.textContent = "Room TTL: expired";
     disableInput();
-    statusDiv.innerText = "This signed room has expired.";
-    statusDiv.style.display = "block";
+    showStatus("This signed room has expired.");
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.close(1000, "room expired");
     }
@@ -101,13 +105,40 @@ async function resolveRoomExpiryFromAPI() {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     });
+    if (res.status === 401 || res.status === 403) {
+      roomExpired = true;
+      roomTTLDiv.classList.remove("hidden");
+      roomTTLDiv.textContent = "Room TTL: restricted";
+      disableInput();
+      showStatus("Sign-in required to access this room.");
+      return;
+    }
+
+    if (res.status === 404 || res.status === 410) {
+      roomExpired = true;
+      roomTTLDiv.classList.remove("hidden");
+      roomTTLDiv.textContent = "Room TTL: expired";
+      disableInput();
+      showStatus("This room has expired or does not exist.");
+      return;
+    }
+
     if (!res.ok) {
       return;
     }
 
     const payload = await res.json();
     if (payload.exists && payload.room && payload.room.expires_at) {
-      roomExpiryTime = parseExpiry(payload.room.expires_at);
+      const resolvedExpiry = parseExpiry(payload.room.expires_at);
+      if (resolvedExpiry && resolvedExpiry.getTime() <= Date.now()) {
+        roomExpired = true;
+        roomTTLDiv.classList.remove("hidden");
+        roomTTLDiv.textContent = "Room TTL: expired";
+        disableInput();
+        showStatus("This room has expired.");
+        return;
+      }
+      roomExpiryTime = resolvedExpiry;
       startCountdown();
     }
   } catch (_err) {
@@ -172,8 +203,7 @@ function connect() {
     disableInput();
 
     if (roomExpired) {
-      statusDiv.innerText = "This signed room has expired.";
-      statusDiv.style.display = "block";
+      showStatus("This signed room has expired.");
       return;
     }
 
@@ -181,14 +211,12 @@ function connect() {
     const nonRetryableCodes = [1000, 1008, 1011];
 
     if (wasClean || nonRetryableCodes.includes(code)) {
-      statusDiv.innerText = "Connection closed. Please refresh the page to reconnect.";
-      statusDiv.style.display = "block";
+      showStatus("Connection closed. Please refresh the page to reconnect.");
       return;
     }
 
     console.log(`WebSocket disconnected (code: ${code}, reason: "${reason || "none"}"). Retrying in ${retryTimeout / 1000}s...`);
-    statusDiv.innerText = `Connection lost. Reconnecting in ${retryTimeout / 1000}s...`;
-    statusDiv.style.display = "block";
+    showStatus(`Connection lost. Reconnecting in ${retryTimeout / 1000}s...`);
     setTimeout(connect, retryTimeout);
     retryTimeout = Math.min(retryTimeout * 2, 30000);
   };
@@ -208,8 +236,7 @@ function sendMessage() {
     }
   } else {
     console.error("Cannot send message: WebSocket is not open.");
-    statusDiv.innerText = "Message not sent. You are currently disconnected.";
-    statusDiv.style.display = "block";
+    showStatus("Message not sent. You are currently disconnected.");
   }
 }
 
