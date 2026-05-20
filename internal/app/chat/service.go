@@ -204,6 +204,39 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID in
 	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
 }
 
+func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomName string, ownerUserID int64) error {
+	if s.roomStore == nil {
+		return ErrSignedRoomUnavailable
+	}
+
+	roomName = strings.TrimSpace(roomName)
+	if roomName == "" {
+		return ErrInvalidRoomName
+	}
+	if ownerUserID <= 0 {
+		return ErrInvalidRoomOwner
+	}
+
+	room, err := s.roomStore.GetSignedRoomByName(ctx, roomName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSignedRoomNotFound
+		}
+		return err
+	}
+	if !room.ExpiresAt.After(time.Now().UTC()) {
+		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
+			log.Printf("Could not delete expired signed room %s: %v", roomName, err)
+		}
+		return ErrSignedRoomExpired
+	}
+	if room.OwnerUserID != ownerUserID {
+		return ErrRoomOwnedByAnotherUser
+	}
+
+	return s.roomStore.DeleteSignedRoomByName(ctx, roomName)
+}
+
 func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomName string) (model.SignedRoom, bool, error) {
 	if s.roomStore == nil {
 		return model.SignedRoom{}, false, ErrSignedRoomUnavailable
