@@ -1,6 +1,7 @@
 package util
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,4 +31,32 @@ func SanitizeQueryValue(v string, maxLen int) string {
 		}
 	}
 	return v
+}
+
+func ClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+
+	if forwarded := strings.TrimSpace(firstHeaderToken(r.Header.Get("X-Forwarded-For"))); forwarded != "" {
+		return forwarded
+	}
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil {
+		return host
+	}
+
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func firstHeaderToken(raw string) string {
+	parts := strings.Split(raw, ",")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
 }

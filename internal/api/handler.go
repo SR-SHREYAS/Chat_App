@@ -17,15 +17,20 @@ import (
 )
 
 type Handler struct {
-	chatService *chat.Service
-	authService *auth.Service
-	upgrader    *websocket.Upgrader
+	chatService     *chat.Service
+	authService     *auth.Service
+	upgrader        *websocket.Upgrader
+	signedRoomJoins *signedRoomJoinLimiter
 }
 
 func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 	return &Handler{
 		chatService: chatService,
 		authService: authService,
+		signedRoomJoins: newSignedRoomJoinLimiter(
+			signedRoomJoinAttemptLimit,
+			signedRoomJoinAttemptWindow,
+		),
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  chat.SocketBufferSize,
 			WriteBufferSize: chat.SocketBufferSize,
@@ -73,6 +78,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	clientIP := util.ClientIP(r)
 
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
 	if userID == "" {
@@ -91,6 +97,12 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if hasSignedRoom {
+		if h.signedRoomJoins.IsBlocked(clientIP, roomName) {
+			_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many failed entry code attempts"), time.Now().Add(time.Second))
+			_ = socket.Close()
+			return
+		}
+
 		entryCode, err := readSignedRoomEntryCodeHandshake(socket)
 		if err != nil {
 			log.Printf("Missing/invalid signed room auth handshake for room %s: %v", roomName, err)
@@ -102,6 +114,12 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, entryCode); err != nil {
 			switch {
 			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
+				h.signedRoomJoins.RecordFailure(clientIP, roomName)
+				if h.signedRoomJoins.IsBlocked(clientIP, roomName) {
+					_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many failed entry code attempts"), time.Now().Add(time.Second))
+					_ = socket.Close()
+					return
+				}
 				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid entry code"), time.Now().Add(time.Second))
 				_ = socket.Close()
 				return
@@ -120,6 +138,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		h.signedRoomJoins.Reset(clientIP, roomName)
 	}
 
 	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomName, userID, userName)
