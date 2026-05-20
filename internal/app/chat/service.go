@@ -257,11 +257,8 @@ func normalizeRoomEntryCode(entryCode string) (string, error) {
 }
 
 func generateRoomEntryCode() (string, error) {
-	minValue := int64(1)
-	for i := 1; i < SignedRoomCodeLength; i++ {
-		minValue *= 10
-	}
-	rangeSize := minValue * 9
+	minValue := model.SignedRoomEntryCodeMinValue()
+	rangeSize := model.SignedRoomEntryCodeRangeSize()
 
 	n, err := rand.Int(rand.Reader, big.NewInt(rangeSize))
 	if err != nil {

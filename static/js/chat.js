@@ -1,6 +1,7 @@
 const params = new URLSearchParams(window.location.search);
 const room = params.get("room");
-const roomCode = String(params.get("code") || "").trim();
+const roomCodeStoragePrefix = "signed-room-code:";
+let roomCode = "";
 
 if (!room) {
   alert("No room specified. Redirecting to homepage...");
@@ -13,7 +14,6 @@ const roomCodeDiv = document.getElementById("roomCode");
 let roomExpiryTime = parseExpiry(params.get("expires_at"));
 let countdownTimer = null;
 let roomExpired = false;
-let entryCodeLength = 4;
 
 const statusDiv = document.createElement("div");
 statusDiv.style.cssText = "position:fixed; top:0; left:0; width:100%; background:rgba(220, 53, 69, 0.9); color:white; text-align:center; padding:10px; display:none; z-index:1000; font-family: Arial, sans-serif; font-weight: bold; transition: all 0.3s ease;";
@@ -36,8 +36,15 @@ function markRoomUnavailable(ttlText, statusMessage) {
 }
 
 function isValidEntryCode(value) {
-  const pattern = new RegExp(`^\\d{${entryCodeLength}}$`);
-  return pattern.test(String(value || "").trim());
+  return ChatEntryCode.isValidEntryCode(value);
+}
+
+function loadRoomEntryCode() {
+  try {
+    roomCode = ChatEntryCode.normalizeEntryCode(sessionStorage.getItem(`${roomCodeStoragePrefix}${room}`));
+  } catch (_err) {
+    roomCode = "";
+  }
 }
 
 function parseExpiry(raw) {
@@ -131,7 +138,7 @@ async function loadRoomConfig() {
     const payload = await res.json().catch(() => ({}));
     const loadedLength = Number.parseInt(payload.entry_code_length, 10);
     if (Number.isFinite(loadedLength) && loadedLength > 0) {
-      entryCodeLength = loadedLength;
+      ChatEntryCode.setEntryCodeLength(loadedLength);
     }
   } catch (_err) {
     // Keep fallback values.
@@ -195,12 +202,12 @@ function connect() {
     room,
     user_id: userId,
   });
-  if (isValidEntryCode(roomCode)) {
-    qs.set("code", roomCode);
-  }
   socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);
 
   socket.onopen = () => {
+    if (isValidEntryCode(roomCode)) {
+      socket.send(JSON.stringify({ type: "auth", entry_code: roomCode }));
+    }
     console.log("WebSocket connection established.");
     retryTimeout = 1000;
     statusDiv.style.display = "none";
@@ -293,8 +300,12 @@ document.getElementById("msg").addEventListener("keyup", function (event) {
 });
 
 loadRoomConfig().finally(() => {
+  loadRoomEntryCode();
   resolveRoomExpiryFromAPI().finally(() => {
     renderRoomCode();
+    if (roomExpired) {
+      return;
+    }
     if (roomExpiryTime) {
       startCountdown();
     }

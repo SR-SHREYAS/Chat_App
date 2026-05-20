@@ -45,11 +45,8 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at ON signed_rooms(expires_at);
 	`
 
-	minCode := 1
-	for i := 1; i < model.SignedRoomEntryCodeLength; i++ {
-		minCode *= 10
-	}
-	rangeSize := minCode * 9
+	minCode := model.SignedRoomEntryCodeMinValue()
+	rangeSize := model.SignedRoomEntryCodeRangeSize()
 	migrateEntryCodeQuery := fmt.Sprintf(`
 	ALTER TABLE signed_rooms
 		ADD COLUMN IF NOT EXISTS entry_code VARCHAR(%d);

@@ -18,12 +18,12 @@ const historyPrevBtn = document.getElementById("historyPrevBtn");
 const historyNextBtn = document.getElementById("historyNextBtn");
 
 const dashboardMessage = document.getElementById("dashboardMessage");
+const roomCodeStoragePrefix = "signed-room-code:";
 
 const state = {
   slideIndex: 0,
   ownedRooms: [],
   preferredRoomAction: "join",
-  entryCodeLength: 4,
   ttlConfig: {
     defaultMinutes: 10,
     maxMinutes: 10080,
@@ -177,6 +177,14 @@ function normalizeRoomInput() {
   return roomInput.value.trim();
 }
 
+function persistRoomEntryCode(roomName, entryCode) {
+  try {
+    sessionStorage.setItem(`${roomCodeStoragePrefix}${roomName}`, entryCode);
+  } catch (_err) {
+    // If storage is unavailable, continue without persistence.
+  }
+}
+
 function parseTTLMinutes() {
   const raw = String(ttlMinutesInput.value || "").trim();
   if (!raw) {
@@ -191,19 +199,6 @@ function parseTTLMinutes() {
     return { error: `TTL cannot exceed ${state.ttlConfig.maxMinutes} minutes` };
   }
   return { value: minutes };
-}
-
-function normalizeEntryCodeInput() {
-  return String(roomCodeInput.value || "").trim();
-}
-
-function parseEntryCode(raw) {
-  const code = String(raw || "").trim();
-  const pattern = new RegExp(`^\\d{${state.entryCodeLength}}$`);
-  if (!pattern.test(code)) {
-    return { error: `Entry code must be exactly ${state.entryCodeLength} digits` };
-  }
-  return { value: code };
 }
 
 async function loadRoomConfig() {
@@ -231,10 +226,11 @@ async function loadRoomConfig() {
       ttlMinutesInput.placeholder = String(def);
     }
     if (Number.isFinite(entryCodeLength) && entryCodeLength > 0) {
-      state.entryCodeLength = entryCodeLength;
-      roomCodeInput.maxLength = entryCodeLength;
-      roomCodeInput.placeholder = `${entryCodeLength}-digit code`;
-      roomCodeInput.pattern = `\\d{${entryCodeLength}}`;
+      ChatEntryCode.setEntryCodeLength(entryCodeLength);
+      const configuredLen = ChatEntryCode.getEntryCodeLength();
+      roomCodeInput.maxLength = configuredLen;
+      roomCodeInput.placeholder = `${configuredLen}-digit code`;
+      roomCodeInput.pattern = `\\d{${configuredLen}}`;
     }
   } catch (_err) {
     // Keep fallback values.
@@ -279,6 +275,7 @@ async function createSignedRoom() {
     if (payload.chat_url) {
       if (payload.entry_code) {
         roomCodeInput.value = payload.entry_code;
+        persistRoomEntryCode(room, payload.entry_code);
       }
       window.location.href = payload.chat_url;
       return;
@@ -296,7 +293,7 @@ async function joinSignedRoom() {
     setMessage("Please enter a room name.", true);
     return;
   }
-  const codeParsed = parseEntryCode(normalizeEntryCodeInput());
+  const codeParsed = ChatEntryCode.parseEntryCode(roomCodeInput.value);
   if (codeParsed.error) {
     setMessage(codeParsed.error, true);
     return;
@@ -320,6 +317,9 @@ async function joinSignedRoom() {
     }
 
     if (payload.chat_url) {
+      if (codeParsed.value) {
+        persistRoomEntryCode(room, codeParsed.value);
+      }
       window.location.href = payload.chat_url;
       return;
     }

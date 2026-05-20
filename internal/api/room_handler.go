@@ -214,8 +214,8 @@ func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Reques
 }
 
 func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeEntryCode bool) signedRoomEnvelope {
-	// A chat URL for signed rooms requires the entry code; enforce this to
-	// avoid any future caller accidentally leaking it via URL only.
+	// If the server returns a direct chat URL, include the entry code in JSON
+	// response payload so the client can send it through a non-URL channel.
 	if includeChatURL {
 		includeEntryCode = true
 	}
@@ -239,8 +239,6 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 		query := url.Values{}
 		query.Set("room", room.RoomName)
 		query.Set("expires_at", room.ExpiresAt.UTC().Format(time.RFC3339))
-		// Entry code is part of the shareable chat URL.
-		query.Set("code", room.EntryCode)
 		out.ChatURL = "/chat?" + query.Encode()
 	}
 
