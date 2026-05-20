@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -239,7 +239,7 @@ func signedRoomJoinSubject(authUser auth.AuthUser) string {
 	if authUser.ID <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("user-%d", authUser.ID)
+	return "user-" + strconv.FormatInt(authUser.ID, 10)
 }
 
 func closeWithPolicyViolation(socket *websocket.Conn, reason string) {

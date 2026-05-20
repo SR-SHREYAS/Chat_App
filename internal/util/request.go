@@ -12,6 +12,9 @@ import (
 var (
 	trustProxyHeadersOnce sync.Once
 	trustProxyHeaders     bool
+	trustProxyHeadersMu   sync.RWMutex
+	trustProxyHeadersSet  bool
+	trustProxyHeadersVal  bool
 )
 
 func CheckSameOrigin(r *http.Request) bool {
@@ -106,10 +109,37 @@ func envFlagEnabled(name string) bool {
 }
 
 func trustProxyHeadersEnabled() bool {
+	trustProxyHeadersMu.RLock()
+	if trustProxyHeadersSet {
+		enabled := trustProxyHeadersVal
+		trustProxyHeadersMu.RUnlock()
+		return enabled
+	}
+	trustProxyHeadersMu.RUnlock()
+
 	trustProxyHeadersOnce.Do(func() {
 		trustProxyHeaders = envFlagEnabled("TRUST_PROXY_HEADERS")
 	})
 	return trustProxyHeaders
+}
+
+// SetTrustProxyHeadersOverride allows callers (for example tests or boot-time
+// configuration wiring) to explicitly control whether forwarded proxy headers
+// are trusted by ClientIP.
+func SetTrustProxyHeadersOverride(enabled bool) {
+	trustProxyHeadersMu.Lock()
+	trustProxyHeadersSet = true
+	trustProxyHeadersVal = enabled
+	trustProxyHeadersMu.Unlock()
+}
+
+// ClearTrustProxyHeadersOverride clears any explicit override and returns
+// ClientIP trust behavior to environment-based configuration.
+func ClearTrustProxyHeadersOverride() {
+	trustProxyHeadersMu.Lock()
+	trustProxyHeadersSet = false
+	trustProxyHeadersVal = false
+	trustProxyHeadersMu.Unlock()
 }
 
 func parseValidIP(raw string) string {
