@@ -98,3 +98,22 @@ func TestSignedRoomJoinLimiter_UsesBothIPAndSubjectWhenAvailable(t *testing.T) {
 		t.Fatalf("expected different subject on same IP to remain unblocked")
 	}
 }
+
+func TestSignedRoomJoinLimiter_PreservesCaseForRoomAndSubject(t *testing.T) {
+	limiter := newSignedRoomJoinLimiter(5, 2*time.Minute)
+	now := time.Now()
+	ip := "1.2.3.4"
+
+	for i := 0; i < 5; i++ {
+		limiter.recordFailureAt(ip, "RoomA", "UserA", now.Add(time.Duration(i)*time.Second))
+	}
+	if !limiter.isBlockedAt(ip, "RoomA", "UserA", now.Add(10*time.Second)) {
+		t.Fatalf("expected original case key to be blocked")
+	}
+	if limiter.isBlockedAt(ip, "rooma", "UserA", now.Add(10*time.Second)) {
+		t.Fatalf("expected differently-cased room name to use separate bucket")
+	}
+	if limiter.isBlockedAt(ip, "RoomA", "usera", now.Add(10*time.Second)) {
+		t.Fatalf("expected differently-cased subject to use separate bucket")
+	}
+}

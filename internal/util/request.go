@@ -6,6 +6,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+)
+
+var (
+	trustProxyHeadersOnce sync.Once
+	trustProxyHeaders     bool
 )
 
 func CheckSameOrigin(r *http.Request) bool {
@@ -41,10 +47,12 @@ func ClientIP(r *http.Request) string {
 
 	remoteIP := remoteIPFromAddr(r.RemoteAddr)
 	if trustProxyHeadersForRemote(remoteIP) {
-		if forwarded := strings.TrimSpace(firstHeaderToken(r.Header.Get("X-Forwarded-For"))); forwarded != "" {
-			return forwarded
+		if forwarded := firstHeaderToken(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+			if ip := parseValidIP(forwarded); ip != "" {
+				return ip
+			}
 		}
-		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		if realIP := parseValidIP(r.Header.Get("X-Real-IP")); realIP != "" {
 			return realIP
 		}
 	}
@@ -73,7 +81,7 @@ func remoteIPFromAddr(remoteAddr string) string {
 }
 
 func trustProxyHeadersForRemote(remoteIP string) bool {
-	if !envFlagEnabled("TRUST_PROXY_HEADERS") {
+	if !trustProxyHeadersEnabled() {
 		return false
 	}
 	if remoteIP == "" {
@@ -95,4 +103,22 @@ func envFlagEnabled(name string) bool {
 	default:
 		return false
 	}
+}
+
+func trustProxyHeadersEnabled() bool {
+	trustProxyHeadersOnce.Do(func() {
+		trustProxyHeaders = envFlagEnabled("TRUST_PROXY_HEADERS")
+	})
+	return trustProxyHeaders
+}
+
+func parseValidIP(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if ip := net.ParseIP(trimmed); ip != nil {
+		return trimmed
+	}
+	return ""
 }

@@ -129,9 +129,9 @@ func (l *signedRoomJoinLimiter) cleanupExpired(now time.Time) {
 }
 
 func joinAttemptKey(ip, roomName, subject string) string {
-	normalizedIP := strings.TrimSpace(strings.ToLower(ip))
-	normalizedRoom := strings.TrimSpace(strings.ToLower(roomName))
-	normalizedSubject := strings.TrimSpace(strings.ToLower(subject))
+	normalizedIP := strings.TrimSpace(ip)
+	normalizedRoom := strings.TrimSpace(roomName)
+	normalizedSubject := strings.TrimSpace(subject)
 	if normalizedRoom == "" {
 		normalizedRoom = "unknown-room"
 	}

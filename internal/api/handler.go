@@ -105,16 +105,14 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 
 	if hasSignedRoom {
 		if h.isSignedRoomJoinBlocked(joinScope) {
-			_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many failed entry code attempts"), time.Now().Add(time.Second))
-			_ = socket.Close()
+			closeWithPolicyViolation(socket, "too many failed entry code attempts")
 			return
 		}
 
 		entryCode, err := readSignedRoomEntryCodeHandshake(socket)
 		if err != nil {
 			log.Printf("Missing/invalid signed room auth handshake for room %s: %v", roomName, err)
-			_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "entry code required"), time.Now().Add(time.Second))
-			_ = socket.Close()
+			closeWithPolicyViolation(socket, "entry code required")
 			return
 		}
 
@@ -123,25 +121,20 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
 				h.recordSignedRoomJoinFailure(joinScope)
 				if h.isSignedRoomJoinBlocked(joinScope) {
-					_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many failed entry code attempts"), time.Now().Add(time.Second))
-					_ = socket.Close()
+					closeWithPolicyViolation(socket, "too many failed entry code attempts")
 					return
 				}
-				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid entry code"), time.Now().Add(time.Second))
-				_ = socket.Close()
+				closeWithPolicyViolation(socket, "invalid entry code")
 				return
 			case errors.Is(err, chat.ErrSignedRoomExpired):
-				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "room expired"), time.Now().Add(time.Second))
-				_ = socket.Close()
+				closeWithPolicyViolation(socket, "room expired")
 				return
 			case errors.Is(err, chat.ErrSignedRoomNotFound):
-				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "room not found"), time.Now().Add(time.Second))
-				_ = socket.Close()
+				closeWithPolicyViolation(socket, "room not found")
 				return
 			default:
 				log.Printf("Could not validate signed room entry for room %s: %v", roomName, err)
-				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "room access denied"), time.Now().Add(time.Second))
-				_ = socket.Close()
+				closeWithPolicyViolation(socket, "room access denied")
 				return
 			}
 		}
@@ -247,4 +240,16 @@ func signedRoomJoinSubject(authUser auth.AuthUser) string {
 		return ""
 	}
 	return fmt.Sprintf("user-%d", authUser.ID)
+}
+
+func closeWithPolicyViolation(socket *websocket.Conn, reason string) {
+	if socket == nil {
+		return
+	}
+	_ = socket.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
+		time.Now().Add(time.Second),
+	)
+	_ = socket.Close()
 }
