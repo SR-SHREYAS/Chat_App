@@ -114,7 +114,8 @@ func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roomName := util.SanitizeQueryValue(req.RoomName, 64)
-	if h.isSignedRoomJoinBlocked(r, roomName, authUser) {
+	joinScope := h.newSignedRoomJoinScope(r, roomName, authUser)
+	if h.isSignedRoomJoinBlocked(joinScope) {
 		writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: "too many failed entry code attempts; retry later"})
 		return
 	}
@@ -122,8 +123,8 @@ func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
 	room, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, req.EntryCode)
 	if err != nil {
 		if errors.Is(err, chat.ErrInvalidRoomEntryCode) {
-			h.recordSignedRoomJoinFailure(r, roomName, authUser)
-			if h.isSignedRoomJoinBlocked(r, roomName, authUser) {
+			h.recordSignedRoomJoinFailure(joinScope)
+			if h.isSignedRoomJoinBlocked(joinScope) {
 				writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: "too many failed entry code attempts; retry later"})
 				return
 			}
@@ -131,7 +132,7 @@ func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
 		h.writeSignedRoomError(w, err)
 		return
 	}
-	h.resetSignedRoomJoinFailures(r, roomName, authUser)
+	h.resetSignedRoomJoinFailures(joinScope)
 
 	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true, true))
 }

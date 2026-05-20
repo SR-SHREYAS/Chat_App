@@ -24,6 +24,12 @@ type Handler struct {
 	signedRoomJoins *signedRoomJoinLimiter
 }
 
+type signedRoomJoinScope struct {
+	clientIP string
+	roomName string
+	subject  string
+}
+
 func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 	return &Handler{
 		chatService: chatService,
@@ -79,6 +85,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	joinScope := h.newSignedRoomJoinScope(r, roomName, authUser)
 
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
 	if userID == "" {
@@ -97,7 +104,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if hasSignedRoom {
-		if h.isSignedRoomJoinBlocked(r, roomName, authUser) {
+		if h.isSignedRoomJoinBlocked(joinScope) {
 			_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many failed entry code attempts"), time.Now().Add(time.Second))
 			_ = socket.Close()
 			return
@@ -114,8 +121,8 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, entryCode); err != nil {
 			switch {
 			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
-				h.recordSignedRoomJoinFailure(r, roomName, authUser)
-				if h.isSignedRoomJoinBlocked(r, roomName, authUser) {
+				h.recordSignedRoomJoinFailure(joinScope)
+				if h.isSignedRoomJoinBlocked(joinScope) {
 					_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many failed entry code attempts"), time.Now().Add(time.Second))
 					_ = socket.Close()
 					return
@@ -138,7 +145,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		h.resetSignedRoomJoinFailures(r, roomName, authUser)
+		h.resetSignedRoomJoinFailures(joinScope)
 	}
 
 	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomName, userID, userName)
@@ -215,22 +222,24 @@ func (h *Handler) resolveAuthenticatedUser(r *http.Request) (auth.AuthUser, bool
 	return h.authService.HandleMe(r.Context(), token)
 }
 
-func (h *Handler) isSignedRoomJoinBlocked(r *http.Request, roomName string, authUser auth.AuthUser) bool {
-	clientIP := util.ClientIP(r)
-	subject := signedRoomJoinSubject(authUser)
-	return h.signedRoomJoins.IsBlocked(clientIP, roomName, subject)
+func (h *Handler) newSignedRoomJoinScope(r *http.Request, roomName string, authUser auth.AuthUser) signedRoomJoinScope {
+	return signedRoomJoinScope{
+		clientIP: util.ClientIP(r),
+		roomName: roomName,
+		subject:  signedRoomJoinSubject(authUser),
+	}
 }
 
-func (h *Handler) recordSignedRoomJoinFailure(r *http.Request, roomName string, authUser auth.AuthUser) {
-	clientIP := util.ClientIP(r)
-	subject := signedRoomJoinSubject(authUser)
-	h.signedRoomJoins.RecordFailure(clientIP, roomName, subject)
+func (h *Handler) isSignedRoomJoinBlocked(scope signedRoomJoinScope) bool {
+	return h.signedRoomJoins.IsBlocked(scope.clientIP, scope.roomName, scope.subject)
 }
 
-func (h *Handler) resetSignedRoomJoinFailures(r *http.Request, roomName string, authUser auth.AuthUser) {
-	clientIP := util.ClientIP(r)
-	subject := signedRoomJoinSubject(authUser)
-	h.signedRoomJoins.Reset(clientIP, roomName, subject)
+func (h *Handler) recordSignedRoomJoinFailure(scope signedRoomJoinScope) {
+	h.signedRoomJoins.RecordFailure(scope.clientIP, scope.roomName, scope.subject)
+}
+
+func (h *Handler) resetSignedRoomJoinFailures(scope signedRoomJoinScope) {
+	h.signedRoomJoins.Reset(scope.clientIP, scope.roomName, scope.subject)
 }
 
 func signedRoomJoinSubject(authUser auth.AuthUser) string {

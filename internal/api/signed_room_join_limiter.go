@@ -44,11 +44,11 @@ func newSignedRoomJoinLimiter(limit int, window time.Duration) *signedRoomJoinLi
 }
 
 func (l *signedRoomJoinLimiter) IsBlocked(ip, roomName, subject string) bool {
-	return l.isBlockedAt(ip, roomName, subject, time.Now().UTC())
+	return l.isBlockedAt(ip, roomName, subject, time.Now())
 }
 
 func (l *signedRoomJoinLimiter) RecordFailure(ip, roomName, subject string) {
-	l.recordFailureAt(ip, roomName, subject, time.Now().UTC())
+	l.recordFailureAt(ip, roomName, subject, time.Now())
 }
 
 func (l *signedRoomJoinLimiter) Reset(ip, roomName, subject string) {
@@ -131,16 +131,19 @@ func (l *signedRoomJoinLimiter) cleanupExpired(now time.Time) {
 func joinAttemptKey(ip, roomName, subject string) string {
 	normalizedIP := strings.TrimSpace(strings.ToLower(ip))
 	normalizedRoom := strings.TrimSpace(strings.ToLower(roomName))
+	normalizedSubject := strings.TrimSpace(strings.ToLower(subject))
 	if normalizedRoom == "" {
 		normalizedRoom = "unknown-room"
 	}
-	if normalizedIP == "" {
-		normalizedSubject := strings.TrimSpace(strings.ToLower(subject))
-		if normalizedSubject != "" {
-			return "subject:" + normalizedSubject + "|room:" + normalizedRoom
-		}
+
+	switch {
+	case normalizedIP != "" && normalizedSubject != "":
+		return "ip:" + normalizedIP + "|subject:" + normalizedSubject + "|room:" + normalizedRoom
+	case normalizedIP != "":
+		return "ip-only:" + normalizedIP + "|room:" + normalizedRoom
+	case normalizedSubject != "":
+		return "subject:" + normalizedSubject + "|room:" + normalizedRoom
+	default:
 		return "room-only|" + normalizedRoom
 	}
-
-	return normalizedIP + "|" + normalizedRoom
 }

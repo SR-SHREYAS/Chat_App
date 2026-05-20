@@ -42,8 +42,9 @@ func TestSignedRoomJoinLimiter_ResetsAfterWindow(t *testing.T) {
 		t.Fatalf("expected limiter to reset after window")
 	}
 
+	limiter.recordFailureAt(ip, room, "", afterWindow)
 	if limiter.isBlockedAt(ip, room, "", afterWindow.Add(time.Second)) {
-		t.Fatalf("expected first attempt after reset to be allowed")
+		t.Fatalf("expected to remain unblocked after first post-reset failure")
 	}
 }
 
@@ -78,5 +79,22 @@ func TestSignedRoomJoinLimiter_EmptyIPFallsBackToSubject(t *testing.T) {
 	}
 	if limiter.isBlockedAt("", room, "user-2", now.Add(10*time.Second)) {
 		t.Fatalf("expected different subject to remain unblocked when ip is empty")
+	}
+}
+
+func TestSignedRoomJoinLimiter_UsesBothIPAndSubjectWhenAvailable(t *testing.T) {
+	limiter := newSignedRoomJoinLimiter(5, 2*time.Minute)
+	now := time.Now()
+	ip := "1.2.3.4"
+	room := "alpha"
+
+	for i := 0; i < 5; i++ {
+		limiter.recordFailureAt(ip, room, "user-1", now.Add(time.Duration(i)*time.Second))
+	}
+	if !limiter.isBlockedAt(ip, room, "user-1", now.Add(10*time.Second)) {
+		t.Fatalf("expected user-1 to be blocked")
+	}
+	if limiter.isBlockedAt(ip, room, "user-2", now.Add(10*time.Second)) {
+		t.Fatalf("expected different subject on same IP to remain unblocked")
 	}
 }

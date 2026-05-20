@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -38,16 +39,18 @@ func ClientIP(r *http.Request) string {
 		return ""
 	}
 
-	if forwarded := strings.TrimSpace(firstHeaderToken(r.Header.Get("X-Forwarded-For"))); forwarded != "" {
-		return forwarded
-	}
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-		return realIP
+	remoteIP := remoteIPFromAddr(r.RemoteAddr)
+	if trustProxyHeadersForRemote(remoteIP) {
+		if forwarded := strings.TrimSpace(firstHeaderToken(r.Header.Get("X-Forwarded-For"))); forwarded != "" {
+			return forwarded
+		}
+		if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+			return realIP
+		}
 	}
 
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil {
-		return host
+	if remoteIP != "" {
+		return remoteIP
 	}
 
 	return strings.TrimSpace(r.RemoteAddr)
@@ -59,4 +62,37 @@ func firstHeaderToken(raw string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[0])
+}
+
+func remoteIPFromAddr(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(remoteAddr)
+}
+
+func trustProxyHeadersForRemote(remoteIP string) bool {
+	if !envFlagEnabled("TRUST_PROXY_HEADERS") {
+		return false
+	}
+	if remoteIP == "" {
+		return false
+	}
+	ip := net.ParseIP(remoteIP)
+	if ip == nil {
+		return false
+	}
+
+	// Only trust forwarded headers when the direct peer is local/private.
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func envFlagEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
