@@ -17,7 +17,17 @@ func NewSignedRoomStore(db *sql.DB) *SignedRoomStore {
 	return &SignedRoomStore{db: db}
 }
 
-func (s *SignedRoomStore) EnsureSchema(ctx context.Context) error {
+func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin signed_rooms schema transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	createTableQuery := fmt.Sprintf(`
 	CREATE TABLE IF NOT EXISTS signed_rooms (
 		room_name VARCHAR(64) PRIMARY KEY,
@@ -52,14 +62,17 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) error {
 		ALTER COLUMN entry_code SET NOT NULL;
 	`, model.SignedRoomEntryCodeLength, minCode, rangeSize, model.SignedRoomEntryCodeLength, model.SignedRoomEntryCodeLength)
 
-	if _, err := s.db.ExecContext(ctx, createTableQuery); err != nil {
-		return err
+	if _, err = tx.ExecContext(ctx, createTableQuery); err != nil {
+		return fmt.Errorf("create signed_rooms table: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, indexQuery); err != nil {
-		return err
+	if _, err = tx.ExecContext(ctx, indexQuery); err != nil {
+		return fmt.Errorf("create signed_rooms indexes: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, migrateEntryCodeQuery); err != nil {
-		return err
+	if _, err = tx.ExecContext(ctx, migrateEntryCodeQuery); err != nil {
+		return fmt.Errorf("migrate signed_rooms entry_code: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit signed_rooms schema transaction: %w", err)
 	}
 	return nil
 }
