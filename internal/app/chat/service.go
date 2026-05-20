@@ -22,7 +22,7 @@ const (
 	MessageBufferSize    = 256
 	DefaultSignedRoomTTL = 10 * time.Minute
 	MaxSignedRoomTTL     = 7 * 24 * time.Hour
-	SignedRoomCodeLength = 4
+	SignedRoomCodeLength = model.SignedRoomEntryCodeLength
 	signedRoomCleanupTTL = 1 * time.Minute
 )
 

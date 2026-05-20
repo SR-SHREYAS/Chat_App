@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"real_time_chat_app/internal/model"
@@ -17,32 +18,50 @@ func NewSignedRoomStore(db *sql.DB) *SignedRoomStore {
 }
 
 func (s *SignedRoomStore) EnsureSchema(ctx context.Context) error {
-	query := `
+	createTableQuery := fmt.Sprintf(`
 	CREATE TABLE IF NOT EXISTS signed_rooms (
 		room_name VARCHAR(64) PRIMARY KEY,
 		owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		owner_display_name VARCHAR(64) NOT NULL,
-		entry_code VARCHAR(4) NOT NULL,
+		entry_code VARCHAR(%d) NOT NULL,
 		expires_at TIMESTAMPTZ NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
+	`, model.SignedRoomEntryCodeLength)
 
-	ALTER TABLE signed_rooms
-		ADD COLUMN IF NOT EXISTS entry_code VARCHAR(4);
-
-	UPDATE signed_rooms
-	SET entry_code = LPAD((1000 + FLOOR(RANDOM() * 9000))::INT::TEXT, 4, '0')
-	WHERE entry_code IS NULL OR entry_code !~ '^[0-9]{4}$';
-
-	ALTER TABLE signed_rooms
-		ALTER COLUMN entry_code SET NOT NULL;
-
+	indexQuery := `
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_owner_user_id ON signed_rooms(owner_user_id);
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at ON signed_rooms(expires_at);
 	`
-	_, err := s.db.ExecContext(ctx, query)
-	return err
+
+	minCode := 1
+	for i := 1; i < model.SignedRoomEntryCodeLength; i++ {
+		minCode *= 10
+	}
+	rangeSize := minCode * 9
+	migrateEntryCodeQuery := fmt.Sprintf(`
+	ALTER TABLE signed_rooms
+		ADD COLUMN IF NOT EXISTS entry_code VARCHAR(%d);
+
+	UPDATE signed_rooms
+	SET entry_code = LPAD((%d + FLOOR(RANDOM() * %d))::INT::TEXT, %d, '0')
+	WHERE entry_code IS NULL OR entry_code !~ '^[0-9]{%d}$';
+
+	ALTER TABLE signed_rooms
+		ALTER COLUMN entry_code SET NOT NULL;
+	`, model.SignedRoomEntryCodeLength, minCode, rangeSize, model.SignedRoomEntryCodeLength, model.SignedRoomEntryCodeLength)
+
+	if _, err := s.db.ExecContext(ctx, createTableQuery); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, indexQuery); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, migrateEntryCodeQuery); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SignedRoomStore) CreateSignedRoom(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
