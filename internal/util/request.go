@@ -15,6 +15,8 @@ var (
 	trustProxyHeadersEnvValue    bool
 	trustProxyHeadersOverrideSet bool
 	trustProxyHeadersOverride    bool
+	trustedProxyCIDRsLoaded      bool
+	trustedProxyCIDRs            []*net.IPNet
 )
 
 func CheckSameOrigin(r *http.Request) bool {
@@ -85,7 +87,16 @@ func trustProxyHeadersForRemote(remoteIP string) bool {
 		return false
 	}
 
-	// Only trust forwarded headers when the direct peer is local/private.
+	if cidrs := trustedProxyCIDRsFromEnv(); len(cidrs) > 0 {
+		for _, cidr := range cidrs {
+			if cidr.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Default to local/private peers unless TRUSTED_PROXY_CIDRS is configured.
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
@@ -143,6 +154,54 @@ func ClearTrustProxyHeadersOverride() {
 	trustProxyHeadersMu.Unlock()
 }
 
+func trustedProxyCIDRsFromEnv() []*net.IPNet {
+	trustProxyHeadersMu.RLock()
+	if trustedProxyCIDRsLoaded {
+		cidrs := trustedProxyCIDRs
+		trustProxyHeadersMu.RUnlock()
+		return cidrs
+	}
+	trustProxyHeadersMu.RUnlock()
+
+	trustProxyHeadersMu.Lock()
+	defer trustProxyHeadersMu.Unlock()
+	if !trustedProxyCIDRsLoaded {
+		trustedProxyCIDRs = parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))
+		trustedProxyCIDRsLoaded = true
+	}
+	return trustedProxyCIDRs
+}
+
+func parseTrustedProxyCIDRs(raw string) []*net.IPNet {
+	parts := strings.Split(raw, ",")
+	cidrs := make([]*net.IPNet, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+
+		if strings.Contains(value, "/") {
+			if _, cidr, err := net.ParseCIDR(value); err == nil {
+				cidrs = append(cidrs, cidr)
+			}
+			continue
+		}
+
+		if ip := net.ParseIP(value); ip != nil {
+			maskBits := 128
+			if ip.To4() != nil {
+				maskBits = 32
+			}
+			cidrs = append(cidrs, &net.IPNet{
+				IP:   ip,
+				Mask: net.CIDRMask(maskBits, maskBits),
+			})
+		}
+	}
+	return cidrs
+}
+
 func parseValidIP(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -160,8 +219,8 @@ func clientIPFromXForwardedFor(header string) string {
 	}
 
 	parts := strings.Split(header, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		ip := parseValidIP(parts[i])
+	for _, part := range parts {
+		ip := parseValidIP(part)
 		if ip == "" {
 			continue
 		}
@@ -170,7 +229,7 @@ func clientIPFromXForwardedFor(header string) string {
 			continue
 		}
 
-		// Prefer the first public address from the trusted chain.
+		// X-Forwarded-For is conventionally "client, proxy1, proxy2".
 		if parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() {
 			continue
 		}

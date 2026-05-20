@@ -40,6 +40,23 @@ func TestClientIP_UsesPublicXForwardedForHopWhenTrusted(t *testing.T) {
 	}
 }
 
+func TestClientIP_UsesLeftMostPublicXForwardedForHop(t *testing.T) {
+	SetTrustProxyHeadersOverride(true)
+	defer ClearTrustProxyHeadersOverride()
+
+	headers := make(http.Header)
+	headers.Set("X-Forwarded-For", "9.9.9.9, 8.8.4.4")
+
+	req := &http.Request{
+		RemoteAddr: "127.0.0.1:1234",
+		Header:     headers,
+	}
+
+	if got := ClientIP(req); got != "9.9.9.9" {
+		t.Fatalf("expected left-most public forwarded ip, got %q", got)
+	}
+}
+
 func TestClientIP_FallsBackToXRealIPWhenForwardedChainIsPrivate(t *testing.T) {
 	SetTrustProxyHeadersOverride(true)
 	defer ClearTrustProxyHeadersOverride()
@@ -74,4 +91,41 @@ func TestClientIP_IgnoresProxyHeadersForUntrustedRemote(t *testing.T) {
 	if got := ClientIP(req); got != "8.8.8.8" {
 		t.Fatalf("expected direct remote ip for untrusted peer, got %q", got)
 	}
+}
+
+func TestClientIP_TrustsConfiguredPublicProxyCIDR(t *testing.T) {
+	SetTrustProxyHeadersOverride(true)
+	defer ClearTrustProxyHeadersOverride()
+	resetTrustedProxyCIDRsForTest(t)
+	t.Setenv("TRUSTED_PROXY_CIDRS", "8.8.8.8/32")
+
+	headers := make(http.Header)
+	headers.Set("X-Forwarded-For", "9.9.9.9")
+
+	req := &http.Request{
+		RemoteAddr: "8.8.8.8:1234",
+		Header:     headers,
+	}
+
+	if got := ClientIP(req); got != "9.9.9.9" {
+		t.Fatalf("expected forwarded ip from configured public proxy, got %q", got)
+	}
+}
+
+func resetTrustedProxyCIDRsForTest(t *testing.T) {
+	t.Helper()
+
+	trustProxyHeadersMu.Lock()
+	previousLoaded := trustedProxyCIDRsLoaded
+	previousCIDRs := trustedProxyCIDRs
+	trustedProxyCIDRsLoaded = false
+	trustedProxyCIDRs = nil
+	trustProxyHeadersMu.Unlock()
+
+	t.Cleanup(func() {
+		trustProxyHeadersMu.Lock()
+		trustedProxyCIDRsLoaded = previousLoaded
+		trustedProxyCIDRs = previousCIDRs
+		trustProxyHeadersMu.Unlock()
+	})
 }
