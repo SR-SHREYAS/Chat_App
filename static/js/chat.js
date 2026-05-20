@@ -1,6 +1,5 @@
 const params = new URLSearchParams(window.location.search);
 const room = params.get("room");
-const roomCodeStoragePrefix = "signed-room-code:";
 let roomCode = "";
 
 if (!room) {
@@ -40,11 +39,7 @@ function isValidEntryCode(value) {
 }
 
 function loadRoomEntryCode() {
-  try {
-    roomCode = ChatEntryCode.normalizeEntryCode(sessionStorage.getItem(`${roomCodeStoragePrefix}${room}`));
-  } catch (_err) {
-    roomCode = "";
-  }
+  roomCode = ChatEntryCode.loadEntryCodeForRoom(room);
 }
 
 function parseExpiry(raw) {

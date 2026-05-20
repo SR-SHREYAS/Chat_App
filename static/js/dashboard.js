@@ -18,7 +18,6 @@ const historyPrevBtn = document.getElementById("historyPrevBtn");
 const historyNextBtn = document.getElementById("historyNextBtn");
 
 const dashboardMessage = document.getElementById("dashboardMessage");
-const roomCodeStoragePrefix = "signed-room-code:";
 
 const state = {
   slideIndex: 0,
@@ -177,14 +176,6 @@ function normalizeRoomInput() {
   return roomInput.value.trim();
 }
 
-function persistRoomEntryCode(roomName, entryCode) {
-  try {
-    sessionStorage.setItem(`${roomCodeStoragePrefix}${roomName}`, entryCode);
-  } catch (_err) {
-    // If storage is unavailable, continue without persistence.
-  }
-}
-
 function parseTTLMinutes() {
   const raw = String(ttlMinutesInput.value || "").trim();
   if (!raw) {
@@ -275,7 +266,7 @@ async function createSignedRoom() {
     if (payload.chat_url) {
       if (payload.entry_code) {
         roomCodeInput.value = payload.entry_code;
-        persistRoomEntryCode(room, payload.entry_code);
+        ChatEntryCode.persistEntryCodeForRoom(room, payload.entry_code);
       }
       window.location.href = payload.chat_url;
       return;
@@ -318,7 +309,7 @@ async function joinSignedRoom() {
 
     if (payload.chat_url) {
       if (codeParsed.value) {
-        persistRoomEntryCode(room, codeParsed.value);
+        ChatEntryCode.persistEntryCodeForRoom(room, codeParsed.value);
       }
       window.location.href = payload.chat_url;
       return;

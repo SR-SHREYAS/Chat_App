@@ -137,15 +137,20 @@ type signedRoomHandshakeMessage struct {
 }
 
 func readSignedRoomEntryCodeHandshake(socket *websocket.Conn) (string, error) {
-	socket.SetReadLimit(1024)
 	_ = socket.SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer func() {
 		_ = socket.SetReadDeadline(time.Time{})
 	}()
 
-	_, payload, err := socket.ReadMessage()
+	messageType, payload, err := socket.ReadMessage()
 	if err != nil {
 		return "", err
+	}
+	if messageType != websocket.TextMessage {
+		return "", errors.New("handshake must be a text message")
+	}
+	if len(payload) > 1024 {
+		return "", errors.New("handshake payload too large")
 	}
 
 	var msg signedRoomHandshakeMessage
