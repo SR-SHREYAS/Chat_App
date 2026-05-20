@@ -28,6 +28,8 @@
       <p class="auth-subtitle">Enter a room name and continue.</p>
       <div class="room-action-form">
         <input id="roomInput" type="text" maxlength="64" placeholder="Room name..." />
+        <label for="roomCodeInput" class="tiny-label">Entry code (required for Join)</label>
+        <input id="roomCodeInput" type="text" inputmode="numeric" placeholder="Entry code" />
         <label for="ttlMinutesInput" class="tiny-label">Room TTL (minutes, default 10)</label>
         <input id="ttlMinutesInput" type="number" min="1" placeholder="10" />
         <div class="room-action-buttons">
@@ -52,6 +54,7 @@
   </main>
 
   <div id="dashboardMessage" class="auth-message dashboard-message" aria-live="polite"></div>
+  <script src="/static/js/entry_code.js"></script>
   <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

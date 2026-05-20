@@ -18,12 +18,14 @@ type createSignedRoomRequest struct {
 }
 
 type joinSignedRoomRequest struct {
-	RoomName string `json:"room_name"`
+	RoomName  string `json:"room_name"`
+	EntryCode string `json:"entry_code"`
 }
 
 type signedRoomEnvelope struct {
 	RoomName         string `json:"room_name"`
 	OwnerDisplayName string `json:"owner_display_name"`
+	EntryCode        string `json:"entry_code,omitempty"`
 	ExpiresAt        string `json:"expires_at"`
 	ExpiresInSeconds int64  `json:"expires_in_seconds"`
 	ChatURL          string `json:"chat_url,omitempty"`
@@ -41,6 +43,7 @@ type signedRoomListEnvelope struct {
 type signedRoomConfigEnvelope struct {
 	DefaultTTLMinutes int `json:"default_ttl_minutes"`
 	MaxTTLMinutes     int `json:"max_ttl_minutes"`
+	EntryCodeLength   int `json:"entry_code_length"`
 }
 
 func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +81,7 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, signedRoomEnvelopeFromModel(room, true))
+	writeJSON(w, http.StatusCreated, signedRoomEnvelopeFromModel(room, true, true))
 }
 
 func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +93,7 @@ func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, signedRoomConfigEnvelope{
 		DefaultTTLMinutes: int(chat.DefaultSignedRoomTTL / time.Minute),
 		MaxTTLMinutes:     int(chat.MaxSignedRoomTTL / time.Minute),
+		EntryCodeLength:   chat.SignedRoomCodeLength,
 	})
 }
 
@@ -109,13 +113,13 @@ func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	room, err := h.chatService.HandleJoinSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64))
+	room, err := h.chatService.HandleJoinSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), req.EntryCode)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true))
+	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true, true))
 }
 
 func (h *Handler) handleOwnedSignedRooms(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +141,7 @@ func (h *Handler) handleOwnedSignedRooms(w http.ResponseWriter, r *http.Request)
 
 	response := signedRoomListEnvelope{Rooms: make([]signedRoomEnvelope, 0, len(rooms))}
 	for _, room := range rooms {
-		response.Rooms = append(response.Rooms, signedRoomEnvelopeFromModel(room, false))
+		response.Rooms = append(response.Rooms, signedRoomEnvelopeFromModel(room, false, true))
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -162,7 +166,7 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	envelope := signedRoomEnvelopeFromModel(room, false)
+	envelope := signedRoomEnvelopeFromModel(room, false, false)
 	writeJSON(w, http.StatusOK, signedRoomStatusEnvelope{
 		Exists: true,
 		Room:   &envelope,
@@ -175,6 +179,8 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge):
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
+	case errors.Is(err, chat.ErrInvalidRoomEntryCode):
+		writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomNotFound):
 		writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomExpired):
@@ -207,7 +213,13 @@ func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Reques
 	return resolved, true
 }
 
-func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL bool) signedRoomEnvelope {
+func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeEntryCode bool) signedRoomEnvelope {
+	// If the server returns a direct chat URL, include the entry code in JSON
+	// response payload so the client can send it through a non-URL channel.
+	if includeChatURL {
+		includeEntryCode = true
+	}
+
 	expiresIn := int64(time.Until(room.ExpiresAt).Seconds())
 	if expiresIn < 0 {
 		expiresIn = 0
@@ -218,6 +230,9 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL bool) sig
 		OwnerDisplayName: room.OwnerDisplayName,
 		ExpiresAt:        room.ExpiresAt.UTC().Format(time.RFC3339),
 		ExpiresInSeconds: expiresIn,
+	}
+	if includeEntryCode {
+		out.EntryCode = room.EntryCode
 	}
 
 	if includeChatURL {

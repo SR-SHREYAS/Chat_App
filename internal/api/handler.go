@@ -3,10 +3,12 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"real_time_chat_app/internal/app/auth"
@@ -88,6 +90,38 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if hasSignedRoom {
+		entryCode, err := readSignedRoomEntryCodeHandshake(socket)
+		if err != nil {
+			log.Printf("Missing/invalid signed room auth handshake for room %s: %v", roomName, err)
+			_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "entry code required"), time.Now().Add(time.Second))
+			_ = socket.Close()
+			return
+		}
+
+		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, entryCode); err != nil {
+			switch {
+			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
+				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid entry code"), time.Now().Add(time.Second))
+				_ = socket.Close()
+				return
+			case errors.Is(err, chat.ErrSignedRoomExpired):
+				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "room expired"), time.Now().Add(time.Second))
+				_ = socket.Close()
+				return
+			case errors.Is(err, chat.ErrSignedRoomNotFound):
+				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "room not found"), time.Now().Add(time.Second))
+				_ = socket.Close()
+				return
+			default:
+				log.Printf("Could not validate signed room entry for room %s: %v", roomName, err)
+				_ = socket.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "room access denied"), time.Now().Add(time.Second))
+				_ = socket.Close()
+				return
+			}
+		}
+	}
+
 	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomName, userID, userName)
 
 	realRoom.Join(client)
@@ -95,6 +129,38 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 
 	go client.Write()
 	client.Read()
+}
+
+type signedRoomHandshakeMessage struct {
+	Type      string `json:"type"`
+	EntryCode string `json:"entry_code"`
+}
+
+func readSignedRoomEntryCodeHandshake(socket *websocket.Conn) (string, error) {
+	_ = socket.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer func() {
+		_ = socket.SetReadDeadline(time.Time{})
+	}()
+
+	messageType, payload, err := socket.ReadMessage()
+	if err != nil {
+		return "", err
+	}
+	if messageType != websocket.TextMessage {
+		return "", errors.New("handshake must be a text message")
+	}
+	if len(payload) > 1024 {
+		return "", errors.New("handshake payload too large")
+	}
+
+	var msg signedRoomHandshakeMessage
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		return "", err
+	}
+	if msg.Type != "auth" {
+		return "", errors.New("invalid handshake message type")
+	}
+	return strings.TrimSpace(msg.EntryCode), nil
 }
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {

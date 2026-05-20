@@ -289,6 +289,16 @@ body {
   font-size: 13px;
 }
 
+.entry-code-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f5564;
+  background: #e5f1f6;
+  border: 1px solid #c4dbe6;
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
 .watermark {
   position: absolute;
   right: -26px;

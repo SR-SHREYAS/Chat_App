@@ -7,6 +7,7 @@ const saveNameBtn = document.getElementById("saveNameBtn");
 const signoutBtn = document.getElementById("signoutBtn");
 
 const roomInput = document.getElementById("roomInput");
+const roomCodeInput = document.getElementById("roomCodeInput");
 const ttlMinutesInput = document.getElementById("ttlMinutesInput");
 const createRoomBtn = document.getElementById("createRoomBtn");
 const joinRoomBtn = document.getElementById("joinRoomBtn");
@@ -93,7 +94,11 @@ function renderOwnedRoomsSlide() {
     const expiry = document.createElement("span");
     expiry.textContent = `expires ${formatExpiry(room.expires_at)}`;
 
-    row.append(name, expiry);
+    const code = document.createElement("span");
+    code.className = "entry-code-badge";
+    code.textContent = `code ${room.entry_code || "----"}`;
+
+    row.append(name, code, expiry);
     list.appendChild(row);
   });
 
@@ -201,6 +206,7 @@ async function loadRoomConfig() {
     const payload = await res.json().catch(() => ({}));
     const max = Number.parseInt(payload.max_ttl_minutes, 10);
     const def = Number.parseInt(payload.default_ttl_minutes, 10);
+    const entryCodeLength = Number.parseInt(payload.entry_code_length, 10);
 
     if (Number.isFinite(max) && max > 0) {
       state.ttlConfig.maxMinutes = max;
@@ -209,6 +215,13 @@ async function loadRoomConfig() {
     if (Number.isFinite(def) && def > 0) {
       state.ttlConfig.defaultMinutes = def;
       ttlMinutesInput.placeholder = String(def);
+    }
+    if (Number.isFinite(entryCodeLength) && entryCodeLength > 0) {
+      ChatEntryCode.setEntryCodeLength(entryCodeLength);
+      const configuredLen = ChatEntryCode.getEntryCodeLength();
+      roomCodeInput.maxLength = configuredLen;
+      roomCodeInput.placeholder = `${configuredLen}-digit code`;
+      roomCodeInput.pattern = `\\d{${configuredLen}}`;
     }
   } catch (_err) {
     // Keep fallback values.
@@ -251,6 +264,10 @@ async function createSignedRoom() {
     }
 
     if (payload.chat_url) {
+      if (payload.entry_code) {
+        roomCodeInput.value = payload.entry_code;
+        ChatEntryCode.persistEntryCodeForRoom(room, payload.entry_code);
+      }
       window.location.href = payload.chat_url;
       return;
     }
@@ -267,6 +284,11 @@ async function joinSignedRoom() {
     setMessage("Please enter a room name.", true);
     return;
   }
+  const codeParsed = ChatEntryCode.parseEntryCode(roomCodeInput.value);
+  if (codeParsed.error) {
+    setMessage(codeParsed.error, true);
+    return;
+  }
 
   setMessage("");
   try {
@@ -277,7 +299,7 @@ async function joinSignedRoom() {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ room_name: room }),
+      body: JSON.stringify({ room_name: room, entry_code: codeParsed.value }),
     });
 
     const payload = await res.json().catch(() => ({}));
@@ -286,6 +308,9 @@ async function joinSignedRoom() {
     }
 
     if (payload.chat_url) {
+      if (codeParsed.value) {
+        ChatEntryCode.persistEntryCodeForRoom(room, codeParsed.value);
+      }
       window.location.href = payload.chat_url;
       return;
     }
@@ -369,6 +394,12 @@ joinRoomBtn.addEventListener("click", () => {
 });
 
 roomInput.addEventListener("keyup", (event) => {
+  if (event.key === "Enter") {
+    runPreferredRoomAction();
+  }
+});
+
+roomCodeInput.addEventListener("keyup", (event) => {
   if (event.key === "Enter") {
     runPreferredRoomAction();
   }

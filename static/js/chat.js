@@ -1,5 +1,6 @@
 const params = new URLSearchParams(window.location.search);
 const room = params.get("room");
+let roomCode = "";
 
 if (!room) {
   alert("No room specified. Redirecting to homepage...");
@@ -7,6 +8,7 @@ if (!room) {
 }
 
 const roomTTLDiv = document.getElementById("roomTTL");
+const roomCodeDiv = document.getElementById("roomCode");
 
 let roomExpiryTime = parseExpiry(params.get("expires_at"));
 let countdownTimer = null;
@@ -30,6 +32,14 @@ function markRoomUnavailable(ttlText, statusMessage) {
   roomTTLDiv.textContent = ttlText;
   disableInput();
   showStatus(statusMessage);
+}
+
+function isValidEntryCode(value) {
+  return ChatEntryCode.isValidEntryCode(value);
+}
+
+function loadRoomEntryCode() {
+  roomCode = ChatEntryCode.loadEntryCodeForRoom(room);
 }
 
 function parseExpiry(raw) {
@@ -57,6 +67,18 @@ function formatRemaining(totalSeconds) {
 function disableInput() {
   document.getElementById("msg").disabled = true;
   document.getElementById("sendBtn").disabled = true;
+}
+
+function renderRoomCode() {
+  if (!roomCodeDiv) {
+    return;
+  }
+  if (!isValidEntryCode(roomCode)) {
+    roomCodeDiv.classList.add("hidden");
+    return;
+  }
+  roomCodeDiv.classList.remove("hidden");
+  roomCodeDiv.textContent = `Entry code: ${roomCode}`;
 }
 
 function enableInput() {
@@ -98,6 +120,26 @@ function startCountdown() {
   countdownTimer = setInterval(renderTTLCountdown, 1000);
 }
 
+async function loadRoomConfig() {
+  try {
+    const res = await fetch("/api/rooms/config", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) {
+      return;
+    }
+    const payload = await res.json().catch(() => ({}));
+    const loadedLength = Number.parseInt(payload.entry_code_length, 10);
+    if (Number.isFinite(loadedLength) && loadedLength > 0) {
+      ChatEntryCode.setEntryCodeLength(loadedLength);
+    }
+  } catch (_err) {
+    // Keep fallback values.
+  }
+}
+
 async function resolveRoomExpiryFromAPI() {
   if (roomExpiryTime) {
     return;
@@ -126,6 +168,10 @@ async function resolveRoomExpiryFromAPI() {
 
     const payload = await res.json();
     if (payload.exists && payload.room && payload.room.expires_at) {
+      if (!isValidEntryCode(roomCode)) {
+        markRoomUnavailable("Room TTL: restricted", "Entry code required to access this room.");
+        return;
+      }
       const resolvedExpiry = parseExpiry(payload.room.expires_at);
       if (resolvedExpiry && resolvedExpiry.getTime() <= Date.now()) {
         markRoomUnavailable("Room TTL: expired", "This room has expired.");
@@ -147,9 +193,16 @@ function connect() {
   const userId = Math.random().toString(36).substring(2, 9);
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/room?room=${encodeURIComponent(room)}&user_id=${encodeURIComponent(userId)}`);
+  const qs = new URLSearchParams({
+    room,
+    user_id: userId,
+  });
+  socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);
 
   socket.onopen = () => {
+    if (isValidEntryCode(roomCode)) {
+      socket.send(JSON.stringify({ type: "auth", entry_code: roomCode }));
+    }
     console.log("WebSocket connection established.");
     retryTimeout = 1000;
     statusDiv.style.display = "none";
@@ -241,9 +294,16 @@ document.getElementById("msg").addEventListener("keyup", function (event) {
   }
 });
 
-resolveRoomExpiryFromAPI().finally(() => {
-  if (roomExpiryTime) {
-    startCountdown();
-  }
-  connect();
+loadRoomConfig().finally(() => {
+  loadRoomEntryCode();
+  resolveRoomExpiryFromAPI().finally(() => {
+    renderRoomCode();
+    if (roomExpired) {
+      return;
+    }
+    if (roomExpiryTime) {
+      startCountdown();
+    }
+    connect();
+  });
 });

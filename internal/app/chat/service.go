@@ -2,11 +2,13 @@ package chat
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +22,7 @@ const (
 	MessageBufferSize    = 256
 	DefaultSignedRoomTTL = 10 * time.Minute
 	MaxSignedRoomTTL     = 7 * 24 * time.Hour
+	SignedRoomCodeLength = model.SignedRoomEntryCodeLength
 	signedRoomCleanupTTL = 1 * time.Minute
 )
 
@@ -31,6 +34,7 @@ var (
 	ErrSignedRoomNotFound     = errors.New("signed room not found")
 	ErrSignedRoomExpired      = errors.New("signed room expired")
 	ErrRoomOwnedByAnotherUser = errors.New("room is owned by another user")
+	ErrInvalidRoomEntryCode   = errors.New("invalid room entry code")
 )
 
 type MessageStore interface {
@@ -40,9 +44,9 @@ type MessageStore interface {
 }
 
 type SignedRoomStore interface {
-	CreateSignedRoom(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName string, expiresAt time.Time) (model.SignedRoom, error)
+	CreateSignedRoom(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	GetSignedRoomByName(ctx context.Context, roomName string) (model.SignedRoom, error)
-	UpdateSignedRoomExpiry(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName string, expiresAt time.Time) (model.SignedRoom, error)
+	UpdateSignedRoomExpiry(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID int64) ([]model.SignedRoom, error)
 	DeleteSignedRoomByName(ctx context.Context, roomName string) error
 	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) (int64, error)
@@ -147,21 +151,26 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 	}
 
 	expiresAt := now.Add(normalizedTTL)
+	entryCode, err := generateRoomEntryCode()
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+
 	existing, err := s.roomStore.GetSignedRoomByName(ctx, roomName)
 	if err == nil {
 		if existing.OwnerUserID != ownerUserID {
 			return model.SignedRoom{}, ErrRoomOwnedByAnotherUser
 		}
-		return s.roomStore.UpdateSignedRoomExpiry(ctx, roomName, ownerUserID, ownerDisplayName, expiresAt)
+		return s.roomStore.UpdateSignedRoomExpiry(ctx, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return model.SignedRoom{}, err
 	}
 
-	return s.roomStore.CreateSignedRoom(ctx, roomName, ownerUserID, ownerDisplayName, expiresAt)
+	return s.roomStore.CreateSignedRoom(ctx, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt)
 }
 
-func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomName string) (model.SignedRoom, error) {
+func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
 	room, found, err := s.HandleGetSignedRoomStatus(ctx, roomName)
 	if err != nil {
 		return model.SignedRoom{}, err
@@ -169,6 +178,15 @@ func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomName string) (mo
 	if !found {
 		return model.SignedRoom{}, ErrSignedRoomNotFound
 	}
+
+	normalizedCode, err := normalizeRoomEntryCode(entryCode)
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+	if room.EntryCode != normalizedCode {
+		return model.SignedRoom{}, ErrInvalidRoomEntryCode
+	}
+
 	return room, nil
 }
 
@@ -223,6 +241,30 @@ func normalizeSignedRoomTTL(ttl time.Duration) (time.Duration, error) {
 		return 0, ErrSignedRoomTTLTooLarge
 	}
 	return ttl, nil
+}
+
+func normalizeRoomEntryCode(entryCode string) (string, error) {
+	code := strings.TrimSpace(entryCode)
+	if len(code) != SignedRoomCodeLength {
+		return "", ErrInvalidRoomEntryCode
+	}
+	for _, ch := range code {
+		if ch < '0' || ch > '9' {
+			return "", ErrInvalidRoomEntryCode
+		}
+	}
+	return code, nil
+}
+
+func generateRoomEntryCode() (string, error) {
+	minValue := model.SignedRoomEntryCodeMinValue()
+	rangeSize := model.SignedRoomEntryCodeRangeSize()
+
+	n, err := rand.Int(rand.Reader, big.NewInt(rangeSize))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%0*d", SignedRoomCodeLength, n.Int64()+minValue), nil
 }
 
 func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.Time) error {

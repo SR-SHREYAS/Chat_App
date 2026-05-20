@@ -22,7 +22,7 @@ func newFakeSignedRoomStore() *fakeSignedRoomStore {
 	return &fakeSignedRoomStore{rooms: make(map[string]model.SignedRoom)}
 }
 
-func (s *fakeSignedRoomStore) CreateSignedRoom(_ context.Context, roomName string, ownerUserID int64, ownerDisplayName string, expiresAt time.Time) (model.SignedRoom, error) {
+func (s *fakeSignedRoomStore) CreateSignedRoom(_ context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -35,6 +35,7 @@ func (s *fakeSignedRoomStore) CreateSignedRoom(_ context.Context, roomName strin
 		RoomName:         roomName,
 		OwnerUserID:      ownerUserID,
 		OwnerDisplayName: ownerDisplayName,
+		EntryCode:        entryCode,
 		ExpiresAt:        expiresAt,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -54,7 +55,7 @@ func (s *fakeSignedRoomStore) GetSignedRoomByName(_ context.Context, roomName st
 	return room, nil
 }
 
-func (s *fakeSignedRoomStore) UpdateSignedRoomExpiry(_ context.Context, roomName string, ownerUserID int64, ownerDisplayName string, expiresAt time.Time) (model.SignedRoom, error) {
+func (s *fakeSignedRoomStore) UpdateSignedRoomExpiry(_ context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -67,6 +68,7 @@ func (s *fakeSignedRoomStore) UpdateSignedRoomExpiry(_ context.Context, roomName
 	}
 
 	room.OwnerDisplayName = ownerDisplayName
+	room.EntryCode = entryCode
 	room.ExpiresAt = expiresAt
 	room.UpdatedAt = time.Now().UTC()
 	s.rooms[roomName] = room
@@ -136,6 +138,9 @@ func TestHandleCreateSignedRoom_DefaultTTL(t *testing.T) {
 	if remaining < 9*time.Minute || remaining > 11*time.Minute {
 		t.Fatalf("expected default TTL around 10 minutes, got %v", remaining)
 	}
+	if len(room.EntryCode) != 4 {
+		t.Fatalf("expected 4-digit entry code, got %q", room.EntryCode)
+	}
 }
 
 func TestHandleCreateSignedRoom_InvalidRoomName(t *testing.T) {
@@ -199,6 +204,7 @@ func TestHandleCreateSignedRoom_UpdatesExistingRoomForSameOwner(t *testing.T) {
 	originalCreatedAt := initialRoom.CreatedAt
 	originalUpdatedAt := initialRoom.UpdatedAt
 	originalExpiresAt := initialRoom.ExpiresAt
+	originalEntryCode := initialRoom.EntryCode
 
 	updatedRoom, err := service.HandleCreateSignedRoom(ctx, "alpha", 1, "owner-b", 10*time.Minute)
 	if err != nil {
@@ -216,6 +222,9 @@ func TestHandleCreateSignedRoom_UpdatesExistingRoomForSameOwner(t *testing.T) {
 	}
 	if !updatedRoom.ExpiresAt.After(originalExpiresAt) {
 		t.Fatalf("expected ExpiresAt to move forward, before=%v after=%v", originalExpiresAt, updatedRoom.ExpiresAt)
+	}
+	if updatedRoom.EntryCode == originalEntryCode {
+		t.Fatalf("expected entry code rotation on recreate, got same code %q", updatedRoom.EntryCode)
 	}
 	if updatedRoom.OwnerDisplayName != "owner-b" {
 		t.Fatalf("expected updated display name owner-b, got %q", updatedRoom.OwnerDisplayName)
@@ -306,13 +315,14 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 			RoomName:         "alpha",
 			OwnerUserID:      1,
 			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
 			ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
 		}
 
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		room, err := service.HandleJoinSignedRoom(context.Background(), "alpha")
+		room, err := service.HandleJoinSignedRoom(context.Background(), "alpha", "1234")
 		if err != nil {
 			t.Fatalf("join signed room: %v", err)
 		}
@@ -325,7 +335,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "missing"); !errors.Is(err, ErrSignedRoomNotFound) {
+		if _, err := service.HandleJoinSignedRoom(context.Background(), "missing", "1234"); !errors.Is(err, ErrSignedRoomNotFound) {
 			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
 		}
 	})
@@ -336,14 +346,61 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 			RoomName:         "expired",
 			OwnerUserID:      1,
 			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
 			ExpiresAt:        time.Now().UTC().Add(-1 * time.Minute),
 		}
 
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "expired"); !errors.Is(err, ErrSignedRoomExpired) {
+		if _, err := service.HandleJoinSignedRoom(context.Background(), "expired", "1234"); !errors.Is(err, ErrSignedRoomExpired) {
 			t.Fatalf("expected ErrSignedRoomExpired, got %v", err)
+		}
+	})
+
+	t.Run("wrong code", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		if _, err := service.HandleJoinSignedRoom(context.Background(), "alpha", "9999"); !errors.Is(err, ErrInvalidRoomEntryCode) {
+			t.Fatalf("expected ErrInvalidRoomEntryCode, got %v", err)
+		}
+	})
+
+	t.Run("malformed code", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		cases := []string{
+			"",
+			"123",
+			"12345",
+			"12a4",
+			"abcd",
+		}
+
+		for _, entryCode := range cases {
+			if _, err := service.HandleJoinSignedRoom(context.Background(), "alpha", entryCode); !errors.Is(err, ErrInvalidRoomEntryCode) {
+				t.Fatalf("expected ErrInvalidRoomEntryCode for %q, got %v", entryCode, err)
+			}
 		}
 	})
 }
@@ -364,18 +421,21 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 			RoomName:         "active-owner-1",
 			OwnerUserID:      1,
 			OwnerDisplayName: "owner-1",
+			EntryCode:        "1111",
 			ExpiresAt:        time.Now().UTC().Add(10 * time.Minute),
 		}
 		store.rooms["expired-owner-1"] = model.SignedRoom{
 			RoomName:         "expired-owner-1",
 			OwnerUserID:      1,
 			OwnerDisplayName: "owner-1",
+			EntryCode:        "2222",
 			ExpiresAt:        time.Now().UTC().Add(-1 * time.Minute),
 		}
 		store.rooms["active-owner-2"] = model.SignedRoom{
 			RoomName:         "active-owner-2",
 			OwnerUserID:      2,
 			OwnerDisplayName: "owner-2",
+			EntryCode:        "3333",
 			ExpiresAt:        time.Now().UTC().Add(10 * time.Minute),
 		}
 
@@ -405,6 +465,7 @@ func TestHandleGetSignedRoomStatus_ExpiredRoom(t *testing.T) {
 		RoomName:         "expired",
 		OwnerUserID:      1,
 		OwnerDisplayName: "owner",
+		EntryCode:        "1234",
 		ExpiresAt:        time.Now().UTC().Add(-1 * time.Minute),
 	}
 
@@ -424,7 +485,7 @@ type errorSignedRoomStore struct {
 	err error
 }
 
-func (s *errorSignedRoomStore) CreateSignedRoom(context.Context, string, int64, string, time.Time) (model.SignedRoom, error) {
+func (s *errorSignedRoomStore) CreateSignedRoom(context.Context, string, int64, string, string, time.Time) (model.SignedRoom, error) {
 	return model.SignedRoom{}, s.err
 }
 
@@ -432,7 +493,7 @@ func (s *errorSignedRoomStore) GetSignedRoomByName(context.Context, string) (mod
 	return model.SignedRoom{}, s.err
 }
 
-func (s *errorSignedRoomStore) UpdateSignedRoomExpiry(context.Context, string, int64, string, time.Time) (model.SignedRoom, error) {
+func (s *errorSignedRoomStore) UpdateSignedRoomExpiry(context.Context, string, int64, string, string, time.Time) (model.SignedRoom, error) {
 	return model.SignedRoom{}, s.err
 }
 
