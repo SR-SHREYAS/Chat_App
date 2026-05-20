@@ -32,12 +32,9 @@ type signedRoomJoinScope struct {
 
 func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 	return &Handler{
-		chatService: chatService,
-		authService: authService,
-		signedRoomJoins: newSignedRoomJoinLimiter(
-			signedRoomJoinAttemptLimit,
-			signedRoomJoinAttemptWindow,
-		),
+		chatService:     chatService,
+		authService:     authService,
+		signedRoomJoins: newDefaultSignedRoomJoinLimiter(),
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  chat.SocketBufferSize,
 			WriteBufferSize: chat.SocketBufferSize,

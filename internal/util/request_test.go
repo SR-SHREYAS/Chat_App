@@ -93,6 +93,20 @@ func TestClientIP_IgnoresProxyHeadersForUntrustedRemote(t *testing.T) {
 	}
 }
 
+func TestClientIP_ReturnsEmptyForUnparseableRemoteAddr(t *testing.T) {
+	SetTrustProxyHeadersOverride(false)
+	defer ClearTrustProxyHeadersOverride()
+
+	req := &http.Request{
+		RemoteAddr: "not-an-ip:1234",
+		Header:     make(http.Header),
+	}
+
+	if got := ClientIP(req); got != "" {
+		t.Fatalf("expected empty client ip for unparseable remote addr, got %q", got)
+	}
+}
+
 func TestClientIP_TrustsConfiguredPublicProxyCIDR(t *testing.T) {
 	SetTrustProxyHeadersOverride(true)
 	defer ClearTrustProxyHeadersOverride()

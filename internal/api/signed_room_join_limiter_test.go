@@ -23,6 +23,20 @@ func TestSignedRoomJoinLimiter_BlocksAfterFiveFailures(t *testing.T) {
 	}
 }
 
+func TestDefaultSignedRoomJoinLimiter_UsesEnvironmentOverrides(t *testing.T) {
+	t.Setenv(signedRoomJoinAttemptLimitEnv, "2")
+	t.Setenv(signedRoomJoinAttemptWindowSecondsEnv, "3")
+
+	limiter := newDefaultSignedRoomJoinLimiter()
+
+	if limiter.limit != 2 {
+		t.Fatalf("expected env limit override, got %d", limiter.limit)
+	}
+	if limiter.window != 3*time.Second {
+		t.Fatalf("expected env window override, got %v", limiter.window)
+	}
+}
+
 func TestSignedRoomJoinLimiter_ResetsAfterWindow(t *testing.T) {
 	window := 2 * time.Minute
 	limiter := newSignedRoomJoinLimiter(5, window)

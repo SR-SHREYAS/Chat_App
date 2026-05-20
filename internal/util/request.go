@@ -55,7 +55,7 @@ func ClientIP(r *http.Request) string {
 		if ip := clientIPFromXForwardedFor(r.Header.Get("X-Forwarded-For")); ip != "" {
 			return ip
 		}
-		if realIP := parseValidIP(r.Header.Get("X-Real-IP")); realIP != "" {
+		if _, realIP := parseValidIP(r.Header.Get("X-Real-IP")); realIP != "" {
 			return realIP
 		}
 	}
@@ -64,15 +64,18 @@ func ClientIP(r *http.Request) string {
 		return remoteIP
 	}
 
-	return strings.TrimSpace(r.RemoteAddr)
+	return ""
 }
 
 func remoteIPFromAddr(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	trimmed := strings.TrimSpace(remoteAddr)
+	host, _, err := net.SplitHostPort(trimmed)
 	if err == nil {
-		return host
+		_, ip := parseValidIP(host)
+		return ip
 	}
-	return strings.TrimSpace(remoteAddr)
+	_, ip := parseValidIP(trimmed)
+	return ip
 }
 
 func trustProxyHeadersForRemote(remoteIP string) bool {
@@ -82,7 +85,7 @@ func trustProxyHeadersForRemote(remoteIP string) bool {
 	if remoteIP == "" {
 		return false
 	}
-	ip := net.ParseIP(remoteIP)
+	ip, _ := parseValidIP(remoteIP)
 	if ip == nil {
 		return false
 	}
@@ -202,15 +205,15 @@ func parseTrustedProxyCIDRs(raw string) []*net.IPNet {
 	return cidrs
 }
 
-func parseValidIP(raw string) string {
+func parseValidIP(raw string) (net.IP, string) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return ""
+		return nil, ""
 	}
 	if ip := net.ParseIP(trimmed); ip != nil {
-		return trimmed
+		return ip, ip.String()
 	}
-	return ""
+	return nil, ""
 }
 
 func clientIPFromXForwardedFor(header string) string {
@@ -220,12 +223,8 @@ func clientIPFromXForwardedFor(header string) string {
 
 	parts := strings.Split(header, ",")
 	for _, part := range parts {
-		ip := parseValidIP(part)
+		parsed, ip := parseValidIP(part)
 		if ip == "" {
-			continue
-		}
-		parsed := net.ParseIP(ip)
-		if parsed == nil {
 			continue
 		}
 

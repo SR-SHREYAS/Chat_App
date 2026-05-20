@@ -1,6 +1,8 @@
 package api
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +11,9 @@ import (
 const (
 	signedRoomJoinAttemptLimit  = 5
 	signedRoomJoinAttemptWindow = 2 * time.Minute
+
+	signedRoomJoinAttemptLimitEnv         = "SIGNED_ROOM_JOIN_ATTEMPT_LIMIT"
+	signedRoomJoinAttemptWindowSecondsEnv = "SIGNED_ROOM_JOIN_ATTEMPT_WINDOW_SECONDS"
 )
 
 type signedRoomJoinLimiter struct {
@@ -41,6 +46,37 @@ func newSignedRoomJoinLimiter(limit int, window time.Duration) *signedRoomJoinLi
 		window:          window,
 		cleanupInterval: window,
 	}
+}
+
+func newDefaultSignedRoomJoinLimiter() *signedRoomJoinLimiter {
+	return newSignedRoomJoinLimiter(
+		signedRoomJoinAttemptLimitFromEnv(),
+		signedRoomJoinAttemptWindowFromEnv(),
+	)
+}
+
+func signedRoomJoinAttemptLimitFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv(signedRoomJoinAttemptLimitEnv))
+	if raw == "" {
+		return signedRoomJoinAttemptLimit
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return signedRoomJoinAttemptLimit
+	}
+	return value
+}
+
+func signedRoomJoinAttemptWindowFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(signedRoomJoinAttemptWindowSecondsEnv))
+	if raw == "" {
+		return signedRoomJoinAttemptWindow
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return signedRoomJoinAttemptWindow
+	}
+	return time.Duration(value) * time.Second
 }
 
 func (l *signedRoomJoinLimiter) IsBlocked(ip, roomName, subject string) bool {
