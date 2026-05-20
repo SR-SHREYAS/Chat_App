@@ -12,10 +12,13 @@ const (
 )
 
 type signedRoomJoinLimiter struct {
-	mu      sync.Mutex
-	entries map[string]joinAttemptEntry
-	limit   int
-	window  time.Duration
+	mu              sync.Mutex
+	entries         map[string]joinAttemptEntry
+	limit           int
+	window          time.Duration
+	lastCleanup     time.Time
+	cleanupInterval time.Duration
+	opCount         uint64
 }
 
 type joinAttemptEntry struct {
@@ -33,35 +36,36 @@ func newSignedRoomJoinLimiter(limit int, window time.Duration) *signedRoomJoinLi
 	}
 
 	return &signedRoomJoinLimiter{
-		entries: make(map[string]joinAttemptEntry),
-		limit:   limit,
-		window:  window,
+		entries:         make(map[string]joinAttemptEntry),
+		limit:           limit,
+		window:          window,
+		cleanupInterval: window,
 	}
 }
 
-func (l *signedRoomJoinLimiter) IsBlocked(ip, roomName string) bool {
-	return l.isBlockedAt(ip, roomName, time.Now().UTC())
+func (l *signedRoomJoinLimiter) IsBlocked(ip, roomName, subject string) bool {
+	return l.isBlockedAt(ip, roomName, subject, time.Now().UTC())
 }
 
-func (l *signedRoomJoinLimiter) RecordFailure(ip, roomName string) {
-	l.recordFailureAt(ip, roomName, time.Now().UTC())
+func (l *signedRoomJoinLimiter) RecordFailure(ip, roomName, subject string) {
+	l.recordFailureAt(ip, roomName, subject, time.Now().UTC())
 }
 
-func (l *signedRoomJoinLimiter) Reset(ip, roomName string) {
-	key := joinAttemptKey(ip, roomName)
+func (l *signedRoomJoinLimiter) Reset(ip, roomName, subject string) {
+	key := joinAttemptKey(ip, roomName, subject)
 
 	l.mu.Lock()
 	delete(l.entries, key)
 	l.mu.Unlock()
 }
 
-func (l *signedRoomJoinLimiter) isBlockedAt(ip, roomName string, now time.Time) bool {
-	key := joinAttemptKey(ip, roomName)
+func (l *signedRoomJoinLimiter) isBlockedAt(ip, roomName, subject string, now time.Time) bool {
+	key := joinAttemptKey(ip, roomName, subject)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.cleanupExpired(now)
+	l.maybeCleanup(now)
 
 	entry, ok := l.entries[key]
 	if !ok {
@@ -75,13 +79,13 @@ func (l *signedRoomJoinLimiter) isBlockedAt(ip, roomName string, now time.Time) 
 	return entry.failures >= l.limit
 }
 
-func (l *signedRoomJoinLimiter) recordFailureAt(ip, roomName string, now time.Time) {
-	key := joinAttemptKey(ip, roomName)
+func (l *signedRoomJoinLimiter) recordFailureAt(ip, roomName, subject string, now time.Time) {
+	key := joinAttemptKey(ip, roomName, subject)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.cleanupExpired(now)
+	l.maybeCleanup(now)
 
 	entry := l.entries[key]
 	if entry.windowStart.IsZero() || now.Sub(entry.windowStart) >= l.window {
@@ -91,6 +95,27 @@ func (l *signedRoomJoinLimiter) recordFailureAt(ip, roomName string, now time.Ti
 	entry.failures++
 	entry.lastSeen = now
 	l.entries[key] = entry
+}
+
+func (l *signedRoomJoinLimiter) maybeCleanup(now time.Time) {
+	l.opCount++
+	if l.cleanupInterval <= 0 {
+		l.cleanupInterval = l.window
+	}
+	if l.lastCleanup.IsZero() {
+		l.cleanupExpired(now)
+		l.lastCleanup = now
+		return
+	}
+
+	// Run full cleanup periodically by time and occasionally by operation count,
+	// instead of on every request path.
+	if now.Sub(l.lastCleanup) < l.cleanupInterval && l.opCount%64 != 0 {
+		return
+	}
+
+	l.cleanupExpired(now)
+	l.lastCleanup = now
 }
 
 func (l *signedRoomJoinLimiter) cleanupExpired(now time.Time) {
@@ -103,15 +128,18 @@ func (l *signedRoomJoinLimiter) cleanupExpired(now time.Time) {
 	}
 }
 
-func joinAttemptKey(ip, roomName string) string {
+func joinAttemptKey(ip, roomName, subject string) string {
 	normalizedIP := strings.TrimSpace(strings.ToLower(ip))
-	if normalizedIP == "" {
-		normalizedIP = "unknown-ip"
-	}
-
 	normalizedRoom := strings.TrimSpace(strings.ToLower(roomName))
 	if normalizedRoom == "" {
 		normalizedRoom = "unknown-room"
+	}
+	if normalizedIP == "" {
+		normalizedSubject := strings.TrimSpace(strings.ToLower(subject))
+		if normalizedSubject != "" {
+			return "subject:" + normalizedSubject + "|room:" + normalizedRoom
+		}
+		return "room-only|" + normalizedRoom
 	}
 
 	return normalizedIP + "|" + normalizedRoom
