@@ -10,11 +10,11 @@ import (
 )
 
 var (
-	trustProxyHeadersOnce sync.Once
-	trustProxyHeaders     bool
-	trustProxyHeadersMu   sync.RWMutex
-	trustProxyHeadersSet  bool
-	trustProxyHeadersVal  bool
+	trustProxyHeadersMu          sync.RWMutex
+	trustProxyHeadersLoaded      bool
+	trustProxyHeadersEnvValue    bool
+	trustProxyHeadersOverrideSet bool
+	trustProxyHeadersOverride    bool
 )
 
 func CheckSameOrigin(r *http.Request) bool {
@@ -50,10 +50,8 @@ func ClientIP(r *http.Request) string {
 
 	remoteIP := remoteIPFromAddr(r.RemoteAddr)
 	if trustProxyHeadersForRemote(remoteIP) {
-		if forwarded := firstHeaderToken(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-			if ip := parseValidIP(forwarded); ip != "" {
-				return ip
-			}
+		if ip := clientIPFromXForwardedFor(r.Header.Get("X-Forwarded-For")); ip != "" {
+			return ip
 		}
 		if realIP := parseValidIP(r.Header.Get("X-Real-IP")); realIP != "" {
 			return realIP
@@ -65,14 +63,6 @@ func ClientIP(r *http.Request) string {
 	}
 
 	return strings.TrimSpace(r.RemoteAddr)
-}
-
-func firstHeaderToken(raw string) string {
-	parts := strings.Split(raw, ",")
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(parts[0])
 }
 
 func remoteIPFromAddr(remoteAddr string) string {
@@ -110,17 +100,28 @@ func envFlagEnabled(name string) bool {
 
 func trustProxyHeadersEnabled() bool {
 	trustProxyHeadersMu.RLock()
-	if trustProxyHeadersSet {
-		enabled := trustProxyHeadersVal
+	if trustProxyHeadersOverrideSet {
+		enabled := trustProxyHeadersOverride
+		trustProxyHeadersMu.RUnlock()
+		return enabled
+	}
+	if trustProxyHeadersLoaded {
+		enabled := trustProxyHeadersEnvValue
 		trustProxyHeadersMu.RUnlock()
 		return enabled
 	}
 	trustProxyHeadersMu.RUnlock()
 
-	trustProxyHeadersOnce.Do(func() {
-		trustProxyHeaders = envFlagEnabled("TRUST_PROXY_HEADERS")
-	})
-	return trustProxyHeaders
+	trustProxyHeadersMu.Lock()
+	defer trustProxyHeadersMu.Unlock()
+	if trustProxyHeadersOverrideSet {
+		return trustProxyHeadersOverride
+	}
+	if !trustProxyHeadersLoaded {
+		trustProxyHeadersEnvValue = envFlagEnabled("TRUST_PROXY_HEADERS")
+		trustProxyHeadersLoaded = true
+	}
+	return trustProxyHeadersEnvValue
 }
 
 // SetTrustProxyHeadersOverride allows callers (for example tests or boot-time
@@ -128,8 +129,8 @@ func trustProxyHeadersEnabled() bool {
 // are trusted by ClientIP.
 func SetTrustProxyHeadersOverride(enabled bool) {
 	trustProxyHeadersMu.Lock()
-	trustProxyHeadersSet = true
-	trustProxyHeadersVal = enabled
+	trustProxyHeadersOverrideSet = true
+	trustProxyHeadersOverride = enabled
 	trustProxyHeadersMu.Unlock()
 }
 
@@ -137,8 +138,8 @@ func SetTrustProxyHeadersOverride(enabled bool) {
 // ClientIP trust behavior to environment-based configuration.
 func ClearTrustProxyHeadersOverride() {
 	trustProxyHeadersMu.Lock()
-	trustProxyHeadersSet = false
-	trustProxyHeadersVal = false
+	trustProxyHeadersOverrideSet = false
+	trustProxyHeadersOverride = false
 	trustProxyHeadersMu.Unlock()
 }
 
@@ -150,5 +151,31 @@ func parseValidIP(raw string) string {
 	if ip := net.ParseIP(trimmed); ip != nil {
 		return trimmed
 	}
+	return ""
+}
+
+func clientIPFromXForwardedFor(header string) string {
+	if strings.TrimSpace(header) == "" {
+		return ""
+	}
+
+	parts := strings.Split(header, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		ip := parseValidIP(parts[i])
+		if ip == "" {
+			continue
+		}
+		parsed := net.ParseIP(ip)
+		if parsed == nil {
+			continue
+		}
+
+		// Prefer the first public address from the trusted chain.
+		if parsed.IsPrivate() || parsed.IsLoopback() || parsed.IsLinkLocalUnicast() {
+			continue
+		}
+		return ip
+	}
+
 	return ""
 }
