@@ -246,7 +246,7 @@ func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID int64,
 			COALESCE(sr.entry_code, ''),
 			sr.expires_at,
 			h.last_visited_at,
-			(sr.room_name IS NOT NULL AND sr.expires_at > NOW()) AS active
+			COALESCE(sr.room_name IS NOT NULL AND sr.expires_at > NOW(), false) AS active
 		FROM room_memberships h
 		INNER JOIN kept_rooms kr ON kr.room_name = h.room_name
 		LEFT JOIN signed_rooms sr ON sr.room_name = h.room_name
