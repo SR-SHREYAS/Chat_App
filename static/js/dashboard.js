@@ -98,7 +98,29 @@ function renderOwnedRoomsSlide() {
     code.className = "entry-code-badge";
     code.textContent = `code ${room.entry_code || "----"}`;
 
-    row.append(name, code, expiry);
+    const meta = document.createElement("div");
+    meta.className = "owned-room-meta";
+    meta.append(code, expiry);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "delete-room-btn";
+    deleteBtn.type = "button";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      if (button.disabled) {
+        return;
+      }
+
+      button.disabled = true;
+      try {
+        await deleteSignedRoom(room.room_name);
+      } catch (_err) {
+        button.disabled = false;
+      }
+    });
+
+    row.append(name, meta, deleteBtn);
     list.appendChild(row);
   });
 
@@ -318,6 +340,34 @@ async function joinSignedRoom() {
     throw new Error("Missing chat URL in response");
   } catch (err) {
     setMessage(err.message || "Could not join room", true);
+  }
+}
+
+async function deleteSignedRoom(roomName) {
+  if (!roomName) {
+    return;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch(`/api/rooms/delete?room=${encodeURIComponent(roomName)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not delete room");
+    }
+
+    state.ownedRooms = state.ownedRooms.filter((room) => room.room_name !== roomName);
+    renderSlide();
+    setMessage(`Deleted room "${roomName}".`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err || "Could not delete room");
+    setMessage(msg || "Could not delete room", true);
+    throw err;
   }
 }
 

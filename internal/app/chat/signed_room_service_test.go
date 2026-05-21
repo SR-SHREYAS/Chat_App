@@ -459,6 +459,79 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 	})
 }
 
+func TestHandleDeleteSignedRoom(t *testing.T) {
+	t.Run("owner deletes active room", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", 1); err != nil {
+			t.Fatalf("delete signed room: %v", err)
+		}
+		if _, ok := store.rooms["alpha"]; ok {
+			t.Fatalf("expected room to be deleted")
+		}
+	})
+
+	t.Run("rejects other owner", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", 2); !errors.Is(err, ErrRoomOwnedByAnotherUser) {
+			t.Fatalf("expected ErrRoomOwnedByAnotherUser, got %v", err)
+		}
+		if _, ok := store.rooms["alpha"]; !ok {
+			t.Fatalf("expected room to remain after rejected delete")
+		}
+	})
+
+	t.Run("missing room", func(t *testing.T) {
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(newFakeSignedRoomStore())
+
+		if err := service.HandleDeleteSignedRoom(context.Background(), "missing", 1); !errors.Is(err, ErrSignedRoomNotFound) {
+			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
+		}
+	})
+
+	t.Run("invalid input", func(t *testing.T) {
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(newFakeSignedRoomStore())
+
+		if err := service.HandleDeleteSignedRoom(context.Background(), " ", 1); !errors.Is(err, ErrInvalidRoomName) {
+			t.Fatalf("expected ErrInvalidRoomName, got %v", err)
+		}
+		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", 0); !errors.Is(err, ErrInvalidRoomOwner) {
+			t.Fatalf("expected ErrInvalidRoomOwner, got %v", err)
+		}
+	})
+
+	t.Run("store unavailable", func(t *testing.T) {
+		service := NewService(noopMessageStore{})
+
+		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", 1); !errors.Is(err, ErrSignedRoomUnavailable) {
+			t.Fatalf("expected ErrSignedRoomUnavailable, got %v", err)
+		}
+	})
+}
+
 func TestHandleGetSignedRoomStatus_ExpiredRoom(t *testing.T) {
 	store := newFakeSignedRoomStore()
 	store.rooms["expired"] = model.SignedRoom{

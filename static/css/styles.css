@@ -289,6 +289,13 @@ body {
   font-size: 13px;
 }
 
+.owned-room-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
 .entry-code-badge {
   font-size: 12px;
   font-weight: 700;
@@ -297,6 +304,32 @@ body {
   border: 1px solid #c4dbe6;
   border-radius: 999px;
   padding: 3px 8px;
+}
+
+.delete-room-btn {
+  border: 1px solid #efc3c3;
+  background: #fff1f1;
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.delete-room-btn:hover {
+  background: #ffe3e3;
+}
+
+.delete-room-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.delete-room-btn:focus-visible {
+  outline: 3px solid rgba(179, 29, 29, 0.35);
+  outline-offset: 2px;
 }
 
 .watermark {
@@ -401,6 +434,12 @@ header {
   }
 
   .room-action-buttons {
+    flex-direction: column;
+  }
+
+  .owned-room-item,
+  .owned-room-meta {
+    align-items: flex-start;
     flex-direction: column;
   }
 

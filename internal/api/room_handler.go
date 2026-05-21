@@ -161,6 +161,30 @@ func (h *Handler) handleOwnedSignedRooms(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (h *Handler) handleDeleteSignedRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authUser, ok := h.requireAuthenticatedUser(w, r)
+	if !ok {
+		return
+	}
+
+	roomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+	if err := h.chatService.HandleDeleteSignedRoom(r.Context(), roomName, authUser.ID); err != nil {
+		if errors.Is(err, chat.ErrRoomOwnedByAnotherUser) {
+			writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
+			return
+		}
+		h.writeSignedRoomError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
 func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
