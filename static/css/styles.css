@@ -322,6 +322,11 @@ body {
   background: #ffe3e3;
 }
 
+.delete-room-btn:focus-visible {
+  outline: 3px solid rgba(179, 29, 29, 0.35);
+  outline-offset: 2px;
+}
+
 .watermark {
   position: absolute;
   right: -26px;

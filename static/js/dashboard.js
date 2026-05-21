@@ -353,7 +353,8 @@ async function deleteSignedRoom(roomName) {
     renderSlide();
     setMessage(`Deleted room "${roomName}".`);
   } catch (err) {
-    setMessage(err.message || "Could not delete room", true);
+    const msg = err instanceof Error ? err.message : String(err || "Could not delete room");
+    setMessage(msg || "Could not delete room", true);
   }
 }
 
