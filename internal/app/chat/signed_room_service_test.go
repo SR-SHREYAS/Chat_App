@@ -15,6 +15,7 @@ import (
 type fakeSignedRoomStore struct {
 	mu                 sync.Mutex
 	rooms              map[string]model.SignedRoom
+	history            []model.RoomHistory
 	deleteExpiredCalls int
 }
 
@@ -111,6 +112,47 @@ func (s *fakeSignedRoomStore) DeleteExpiredSignedRooms(_ context.Context, now ti
 	return removed, nil
 }
 
+func (s *fakeSignedRoomStore) RecordRoomMembership(_ context.Context, userID int64, roomName, role string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	for i, item := range s.history {
+		if item.RoomName == roomName && item.Role == role {
+			s.history[i].LastVisitedAt = now
+			return nil
+		}
+	}
+	s.history = append(s.history, model.RoomHistory{
+		RoomName:      roomName,
+		Role:          role,
+		LastVisitedAt: now,
+	})
+	return nil
+}
+
+func (s *fakeSignedRoomStore) ListRoomMemberships(_ context.Context, _ int64, limit int) ([]model.RoomHistory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit > len(s.history) {
+		limit = len(s.history)
+	}
+	out := make([]model.RoomHistory, limit)
+	copy(out, s.history[:limit])
+	return out, nil
+}
+
+func (s *fakeSignedRoomStore) PruneRoomMemberships(_ context.Context, _ int64, limit int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit > 0 && len(s.history) > limit {
+		s.history = s.history[:limit]
+	}
+	return nil
+}
+
 func (s *fakeSignedRoomStore) DeleteExpiredCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,8 +168,9 @@ func (noopMessageStore) GetRecentMessages(context.Context, string, int) ([]model
 func (noopMessageStore) Ping(context.Context) error { return nil }
 
 func TestHandleCreateSignedRoom_DefaultTTL(t *testing.T) {
+	store := newFakeSignedRoomStore()
 	service := NewService(noopMessageStore{})
-	service.BindSignedRoomStore(newFakeSignedRoomStore())
+	service.BindSignedRoomStore(store)
 
 	room, err := service.HandleCreateSignedRoom(context.Background(), "alpha", 1, "owner", 0)
 	if err != nil {
@@ -140,6 +183,9 @@ func TestHandleCreateSignedRoom_DefaultTTL(t *testing.T) {
 	}
 	if len(room.EntryCode) != 4 {
 		t.Fatalf("expected 4-digit entry code, got %q", room.EntryCode)
+	}
+	if len(store.history) != 2 {
+		t.Fatalf("expected owned and joined history records, got %d", len(store.history))
 	}
 }
 
@@ -459,6 +505,34 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 	})
 }
 
+func TestHandleRecordSignedRoomJoinAndListHistory(t *testing.T) {
+	store := newFakeSignedRoomStore()
+	store.history = append(store.history, model.RoomHistory{
+		RoomName:      "owned-room",
+		Role:          roomHistoryRoleOwned,
+		LastVisitedAt: time.Now().UTC(),
+		Active:        true,
+	})
+
+	service := NewService(noopMessageStore{})
+	service.BindSignedRoomStore(store)
+
+	if err := service.HandleRecordSignedRoomJoin(context.Background(), "joined-room", 1); err != nil {
+		t.Fatalf("record signed room join: %v", err)
+	}
+
+	history, err := service.HandleListRoomHistory(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("list room history: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 history records, got %d", len(history))
+	}
+	if history[1].Role != roomHistoryRoleJoined {
+		t.Fatalf("expected joined history role, got %q", history[1].Role)
+	}
+}
+
 func TestHandleDeleteSignedRoom(t *testing.T) {
 	t.Run("owner deletes active room", func(t *testing.T) {
 		store := newFakeSignedRoomStore()
@@ -580,4 +654,16 @@ func (s *errorSignedRoomStore) DeleteSignedRoomByName(context.Context, string) e
 
 func (s *errorSignedRoomStore) DeleteExpiredSignedRooms(context.Context, time.Time) (int64, error) {
 	return 0, s.err
+}
+
+func (s *errorSignedRoomStore) RecordRoomMembership(context.Context, int64, string, string) error {
+	return s.err
+}
+
+func (s *errorSignedRoomStore) PruneRoomMemberships(context.Context, int64, int) error {
+	return s.err
+}
+
+func (s *errorSignedRoomStore) ListRoomMemberships(context.Context, int64, int) ([]model.RoomHistory, error) {
+	return nil, s.err
 }

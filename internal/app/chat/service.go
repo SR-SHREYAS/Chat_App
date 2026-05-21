@@ -18,12 +18,15 @@ import (
 )
 
 const (
-	SocketBufferSize     = 1024
-	MessageBufferSize    = 256
-	DefaultSignedRoomTTL = 10 * time.Minute
-	MaxSignedRoomTTL     = 7 * 24 * time.Hour
-	SignedRoomCodeLength = model.SignedRoomEntryCodeLength
-	signedRoomCleanupTTL = 1 * time.Minute
+	SocketBufferSize      = 1024
+	MessageBufferSize     = 256
+	DefaultSignedRoomTTL  = 10 * time.Minute
+	MaxSignedRoomTTL      = 7 * 24 * time.Hour
+	SignedRoomCodeLength  = model.SignedRoomEntryCodeLength
+	signedRoomCleanupTTL  = 1 * time.Minute
+	roomHistoryLimit      = 15
+	roomHistoryRoleOwned  = "owned"
+	roomHistoryRoleJoined = "joined"
 )
 
 var (
@@ -50,6 +53,9 @@ type SignedRoomStore interface {
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID int64) ([]model.SignedRoom, error)
 	DeleteSignedRoomByName(ctx context.Context, roomName string) error
 	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) (int64, error)
+	RecordRoomMembership(ctx context.Context, userID int64, roomName, role string) error
+	PruneRoomMemberships(ctx context.Context, userID int64, limit int) error
+	ListRoomMemberships(ctx context.Context, userID int64, limit int) ([]model.RoomHistory, error)
 }
 
 type Service struct {
@@ -157,17 +163,26 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 	}
 
 	existing, err := s.roomStore.GetSignedRoomByName(ctx, roomName)
+	var room model.SignedRoom
 	if err == nil {
 		if existing.OwnerUserID != ownerUserID {
 			return model.SignedRoom{}, ErrRoomOwnedByAnotherUser
 		}
-		return s.roomStore.UpdateSignedRoomExpiry(ctx, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+		room, err = s.roomStore.UpdateSignedRoomExpiry(ctx, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt)
+	} else if errors.Is(err, sql.ErrNoRows) {
+		room, err = s.roomStore.CreateSignedRoom(ctx, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt)
+	} else {
 		return model.SignedRoom{}, err
 	}
 
-	return s.roomStore.CreateSignedRoom(ctx, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt)
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+
+	s.recordRoomMembershipBestEffort(ctx, ownerUserID, roomName, roomHistoryRoleOwned)
+	s.recordRoomMembershipBestEffort(ctx, ownerUserID, roomName, roomHistoryRoleJoined)
+
+	return room, nil
 }
 
 func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
@@ -204,6 +219,39 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID in
 	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
 }
 
+func (s *Service) HandleRecordSignedRoomJoin(ctx context.Context, roomName string, userID int64) error {
+	if s.roomStore == nil {
+		return ErrSignedRoomUnavailable
+	}
+
+	roomName = strings.TrimSpace(roomName)
+	if roomName == "" {
+		return ErrInvalidRoomName
+	}
+	if userID <= 0 {
+		return ErrInvalidRoomOwner
+	}
+
+	if err := s.roomStore.RecordRoomMembership(ctx, userID, roomName, roomHistoryRoleJoined); err != nil {
+		return err
+	}
+	return s.roomStore.PruneRoomMemberships(ctx, userID, roomHistoryLimit)
+}
+
+func (s *Service) HandleListRoomHistory(ctx context.Context, userID int64) ([]model.RoomHistory, error) {
+	if s.roomStore == nil {
+		return nil, ErrSignedRoomUnavailable
+	}
+	if userID <= 0 {
+		return nil, ErrInvalidRoomOwner
+	}
+
+	if err := s.maybeCleanupExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
+		log.Printf("Best-effort signed room cleanup failed before history list for user %d: %v", userID, err)
+	}
+	return s.roomStore.ListRoomMemberships(ctx, userID, roomHistoryLimit)
+}
+
 func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomName string, ownerUserID int64) error {
 	if s.roomStore == nil {
 		return ErrSignedRoomUnavailable
@@ -237,6 +285,16 @@ func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomName string, o
 	}
 
 	return s.roomStore.DeleteSignedRoomByName(ctx, roomName)
+}
+
+func (s *Service) recordRoomMembershipBestEffort(ctx context.Context, userID int64, roomName, role string) {
+	if err := s.roomStore.RecordRoomMembership(ctx, userID, roomName, role); err != nil {
+		log.Printf("Could not record room membership user=%d room=%s role=%s: %v", userID, roomName, role, err)
+		return
+	}
+	if err := s.roomStore.PruneRoomMemberships(ctx, userID, roomHistoryLimit); err != nil {
+		log.Printf("Could not prune room history user=%d: %v", userID, err)
+	}
 }
 
 func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomName string) (model.SignedRoom, bool, error) {

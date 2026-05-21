@@ -21,7 +21,10 @@ const dashboardMessage = document.getElementById("dashboardMessage");
 
 const state = {
   slideIndex: 0,
-  ownedRooms: [],
+  roomHistory: {
+    owned: [],
+    joined: [],
+  },
   preferredRoomAction: "join",
   ttlConfig: {
     defaultMinutes: 10,
@@ -32,18 +35,13 @@ const state = {
 const slides = [
   {
     title: "Owned Rooms",
-    heading: "Active Signed Rooms",
-    text: "No active signed rooms yet. Create one to start the TTL flow.",
+    heading: "Your Rooms",
+    text: "No owned room history yet. Create one to start the TTL flow.",
   },
   {
-    title: "Room History",
-    heading: "Shared Rooms",
-    text: "This section will show rooms shared with you and quick re-entry links.",
-  },
-  {
-    title: "Room History",
-    heading: "Pinned Rooms",
-    text: "This section will support pinned rooms for faster workflow.",
+    title: "Joined Rooms",
+    heading: "Rooms You Joined",
+    text: "No joined room history yet. Join a signed room to see it here.",
   },
 ];
 
@@ -65,8 +63,16 @@ function formatExpiry(expiresAt) {
   return dt.toLocaleString();
 }
 
-function renderOwnedRoomsSlide() {
-  const slide = slides[0];
+function formatLastVisited(lastVisitedAt) {
+  const dt = new Date(lastVisitedAt);
+  if (Number.isNaN(dt.getTime())) {
+    return "recently";
+  }
+  return dt.toLocaleString();
+}
+
+function renderRoomHistorySlide(index, rooms) {
+  const slide = slides[index];
   historyTitle.textContent = slide.title;
   historySlide.replaceChildren();
 
@@ -74,7 +80,7 @@ function renderOwnedRoomsSlide() {
   heading.textContent = slide.heading;
   historySlide.appendChild(heading);
 
-  if (!state.ownedRooms.length) {
+  if (!rooms.length) {
     const empty = document.createElement("p");
     empty.textContent = slide.text;
     historySlide.appendChild(empty);
@@ -84,69 +90,81 @@ function renderOwnedRoomsSlide() {
   const list = document.createElement("div");
   list.className = "owned-room-list";
 
-  state.ownedRooms.forEach((room) => {
+  rooms.forEach((room) => {
     const row = document.createElement("div");
     row.className = "owned-room-item";
+    if (!room.active) {
+      row.classList.add("inactive-room-item");
+    }
 
     const name = document.createElement("strong");
     name.textContent = room.room_name;
 
     const expiry = document.createElement("span");
-    expiry.textContent = `expires ${formatExpiry(room.expires_at)}`;
+    expiry.textContent = room.active ? `expires ${formatExpiry(room.expires_at)}` : "inactive";
 
     const code = document.createElement("span");
     code.className = "entry-code-badge";
-    code.textContent = `code ${room.entry_code || "----"}`;
+    code.textContent = room.active ? `code ${room.entry_code || "----"}` : "expired";
+
+    const lastSeen = document.createElement("span");
+    lastSeen.textContent = `latest ${formatLastVisited(room.last_visited_at)}`;
 
     const meta = document.createElement("div");
     meta.className = "owned-room-meta";
-    meta.append(code, expiry);
+    meta.append(code, expiry, lastSeen);
 
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "delete-room-btn";
-    deleteBtn.type = "button";
-    deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", async (event) => {
-      const button = event.currentTarget;
-      if (button.disabled) {
-        return;
-      }
+    const actions = document.createElement("div");
+    actions.className = "owned-room-actions";
 
-      button.disabled = true;
-      try {
-        await deleteSignedRoom(room.room_name);
-      } catch (_err) {
-        button.disabled = false;
-      }
-    });
+    if (room.active && room.chat_url) {
+      const openBtn = document.createElement("button");
+      openBtn.className = "open-room-btn";
+      openBtn.type = "button";
+      openBtn.textContent = "Open";
+      openBtn.addEventListener("click", () => {
+        if (room.entry_code) {
+          ChatEntryCode.persistEntryCodeForRoom(room.room_name, room.entry_code);
+        }
+        window.location.href = room.chat_url;
+      });
+      actions.appendChild(openBtn);
+    }
 
-    row.append(name, meta, deleteBtn);
+    if (room.active && room.role === "owned") {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "delete-room-btn";
+      deleteBtn.type = "button";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) {
+          return;
+        }
+
+        button.disabled = true;
+        try {
+          await deleteSignedRoom(room.room_name);
+        } catch (_err) {
+          button.disabled = false;
+        }
+      });
+      actions.appendChild(deleteBtn);
+    }
+
+    row.append(name, meta, actions);
     list.appendChild(row);
   });
 
   historySlide.appendChild(list);
 }
 
-function renderStaticSlide(index) {
-  const slide = slides[index];
-  historyTitle.textContent = slide.title;
-  historySlide.replaceChildren();
-
-  const heading = document.createElement("h3");
-  heading.textContent = slide.heading;
-
-  const bodyText = document.createElement("p");
-  bodyText.textContent = slide.text;
-
-  historySlide.append(heading, bodyText);
-}
-
 function renderSlide() {
   if (state.slideIndex === 0) {
-    renderOwnedRoomsSlide();
+    renderRoomHistorySlide(0, state.roomHistory.owned);
     return;
   }
-  renderStaticSlide(state.slideIndex);
+  renderRoomHistorySlide(1, state.roomHistory.joined);
 }
 
 async function loadSession() {
@@ -174,9 +192,9 @@ async function loadSession() {
   }
 }
 
-async function loadOwnedRooms() {
+async function loadRoomHistory() {
   try {
-    const res = await fetch("/api/rooms/owned", {
+    const res = await fetch("/api/rooms/history", {
       method: "GET",
       credentials: "same-origin",
       headers: { Accept: "application/json" },
@@ -184,13 +202,15 @@ async function loadOwnedRooms() {
 
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(payload.error || "Could not load rooms");
+      throw new Error(payload.error || "Could not load room history");
     }
 
-    state.ownedRooms = Array.isArray(payload.rooms) ? payload.rooms : [];
+    state.roomHistory.owned = Array.isArray(payload.owned) ? payload.owned : [];
+    state.roomHistory.joined = Array.isArray(payload.joined) ? payload.joined : [];
     renderSlide();
   } catch (err) {
-    setMessage(err.message || "Could not load owned rooms", true);
+    const msg = err instanceof Error ? err.message : String(err || "Could not load room history");
+    setMessage(msg || "Could not load room history", true);
   }
 }
 
@@ -361,8 +381,7 @@ async function deleteSignedRoom(roomName) {
       throw new Error(payload.error || "Could not delete room");
     }
 
-    state.ownedRooms = state.ownedRooms.filter((room) => room.room_name !== roomName);
-    renderSlide();
+    await loadRoomHistory();
     setMessage(`Deleted room "${roomName}".`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err || "Could not delete room");
@@ -469,6 +488,6 @@ renderSlide();
 loadRoomConfig();
 loadSession().then((ok) => {
   if (ok) {
-    loadOwnedRooms();
+    loadRoomHistory();
   }
 });

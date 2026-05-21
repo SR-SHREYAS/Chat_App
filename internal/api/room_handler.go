@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -38,6 +39,23 @@ type signedRoomStatusEnvelope struct {
 
 type signedRoomListEnvelope struct {
 	Rooms []signedRoomEnvelope `json:"rooms"`
+}
+
+type roomHistoryEnvelope struct {
+	Owned  []roomHistoryItemEnvelope `json:"owned"`
+	Joined []roomHistoryItemEnvelope `json:"joined"`
+}
+
+type roomHistoryItemEnvelope struct {
+	RoomName         string `json:"room_name"`
+	Role             string `json:"role"`
+	OwnerDisplayName string `json:"owner_display_name,omitempty"`
+	EntryCode        string `json:"entry_code,omitempty"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	ExpiresInSeconds int64  `json:"expires_in_seconds"`
+	LastVisitedAt    string `json:"last_visited_at"`
+	Active           bool   `json:"active"`
+	ChatURL          string `json:"chat_url,omitempty"`
 }
 
 type signedRoomConfigEnvelope struct {
@@ -133,6 +151,9 @@ func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.resetSignedRoomJoinFailures(joinScope)
+	if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomName, authUser.ID); err != nil {
+		log.Printf("Could not record joined signed room user=%d room=%s: %v", authUser.ID, roomName, err)
+	}
 
 	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true, true))
 }
@@ -158,6 +179,40 @@ func (h *Handler) handleOwnedSignedRooms(w http.ResponseWriter, r *http.Request)
 	for _, room := range rooms {
 		response.Rooms = append(response.Rooms, signedRoomEnvelopeFromModel(room, false, true))
 	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) handleRoomHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authUser, ok := h.requireAuthenticatedUser(w, r)
+	if !ok {
+		return
+	}
+
+	history, err := h.chatService.HandleListRoomHistory(r.Context(), authUser.ID)
+	if err != nil {
+		h.writeSignedRoomError(w, err)
+		return
+	}
+
+	response := roomHistoryEnvelope{
+		Owned:  make([]roomHistoryItemEnvelope, 0),
+		Joined: make([]roomHistoryItemEnvelope, 0),
+	}
+	for _, item := range history {
+		envelope := roomHistoryEnvelopeFromModel(item)
+		switch item.Role {
+		case "owned":
+			response.Owned = append(response.Owned, envelope)
+		case "joined":
+			response.Joined = append(response.Joined, envelope)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -278,6 +333,40 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 		query := url.Values{}
 		query.Set("room", room.RoomName)
 		query.Set("expires_at", room.ExpiresAt.UTC().Format(time.RFC3339))
+		out.ChatURL = "/chat?" + query.Encode()
+	}
+
+	return out
+}
+
+func roomHistoryEnvelopeFromModel(item model.RoomHistory) roomHistoryItemEnvelope {
+	expiresAt := ""
+	expiresIn := int64(0)
+	if !item.ExpiresAt.IsZero() {
+		expiresAt = item.ExpiresAt.UTC().Format(time.RFC3339)
+		expiresIn = int64(time.Until(item.ExpiresAt).Seconds())
+		if expiresIn < 0 {
+			expiresIn = 0
+		}
+	}
+
+	out := roomHistoryItemEnvelope{
+		RoomName:         item.RoomName,
+		Role:             item.Role,
+		OwnerDisplayName: item.OwnerDisplayName,
+		ExpiresAt:        expiresAt,
+		ExpiresInSeconds: expiresIn,
+		LastVisitedAt:    item.LastVisitedAt.UTC().Format(time.RFC3339),
+		Active:           item.Active,
+	}
+
+	if item.Active {
+		out.EntryCode = item.EntryCode
+		query := url.Values{}
+		query.Set("room", item.RoomName)
+		if expiresAt != "" {
+			query.Set("expires_at", expiresAt)
+		}
 		out.ChatURL = "/chat?" + query.Encode()
 	}
 
