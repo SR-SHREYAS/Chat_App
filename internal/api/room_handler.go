@@ -18,6 +18,11 @@ type createSignedRoomRequest struct {
 	TTLMinutes int    `json:"ttl_minutes"`
 }
 
+type reviveSignedRoomRequest struct {
+	RoomName   string `json:"room_name"`
+	TTLMinutes int    `json:"ttl_minutes"`
+}
+
 type joinSignedRoomRequest struct {
 	RoomName  string `json:"room_name"`
 	EntryCode string `json:"entry_code"`
@@ -100,6 +105,44 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusCreated, signedRoomEnvelopeFromModel(room, true, true))
+}
+
+func (h *Handler) handleReviveSignedRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authUser, ok := h.requireAuthenticatedUser(w, r)
+	if !ok {
+		return
+	}
+
+	var req reviveSignedRoomRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "invalid request body"})
+		return
+	}
+
+	if req.TTLMinutes < 0 {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ttl must be non-negative"})
+		return
+	}
+
+	maxMinutes := int(chat.MaxSignedRoomTTL / time.Minute)
+	if req.TTLMinutes > maxMinutes {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
+		return
+	}
+
+	ttl := time.Duration(req.TTLMinutes) * time.Minute
+	room, err := h.chatService.HandleReviveSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
+	if err != nil {
+		h.writeSignedRoomError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true, true))
 }
 
 func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +322,8 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomExpired):
 		writeJSON(w, http.StatusGone, errorEnvelope{Error: err.Error()})
+	case errors.Is(err, chat.ErrSignedRoomAlreadyActive):
+		writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrRoomOwnedByAnotherUser):
 		writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 	default:

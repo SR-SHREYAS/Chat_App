@@ -201,6 +201,21 @@ func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID int64
 	return nil
 }
 
+func (s *SignedRoomStore) GetRoomMembership(ctx context.Context, userID int64, roomName, role string) (model.RoomHistory, error) {
+	var item model.RoomHistory
+	query := `
+		SELECT room_name, role, last_visited_at
+		FROM room_memberships
+		WHERE user_id = $1 AND room_name = $2 AND role = $3
+	`
+	err := s.db.QueryRowContext(ctx, query, userID, roomName, role).
+		Scan(&item.RoomName, &item.Role, &item.LastVisitedAt)
+	if err != nil {
+		return model.RoomHistory{}, err
+	}
+	return item, nil
+}
+
 func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID int64, limit int) error {
 	if limit < 1 {
 		limit = 1
