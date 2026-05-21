@@ -106,7 +106,19 @@ function renderOwnedRoomsSlide() {
     deleteBtn.className = "delete-room-btn";
     deleteBtn.type = "button";
     deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", () => deleteSignedRoom(room.room_name));
+    deleteBtn.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      if (button.disabled) {
+        return;
+      }
+
+      button.disabled = true;
+      try {
+        await deleteSignedRoom(room.room_name);
+      } catch (_err) {
+        button.disabled = false;
+      }
+    });
 
     row.append(name, meta, deleteBtn);
     list.appendChild(row);
@@ -355,6 +367,7 @@ async function deleteSignedRoom(roomName) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err || "Could not delete room");
     setMessage(msg || "Could not delete room", true);
+    throw err;
   }
 }
 

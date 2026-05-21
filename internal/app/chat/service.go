@@ -224,7 +224,9 @@ func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomName string, o
 		}
 		return err
 	}
-	if !room.ExpiresAt.After(time.Now().UTC()) {
+
+	now := time.Now().UTC()
+	if !room.ExpiresAt.After(now) {
 		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
 			log.Printf("Could not delete expired signed room %s: %v", roomName, err)
 		}
