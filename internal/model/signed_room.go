@@ -25,3 +25,13 @@ type SignedRoom struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
+
+type RoomHistory struct {
+	RoomName         string
+	Role             string
+	OwnerDisplayName string
+	EntryCode        string
+	ExpiresAt        time.Time
+	LastVisitedAt    time.Time
+	Active           bool
+}

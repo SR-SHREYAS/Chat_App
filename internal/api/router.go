@@ -21,6 +21,7 @@ func RegisterRoutes(mux *http.ServeMux, h *Handler) {
 	mux.HandleFunc("/api/rooms/create", h.handleCreateSignedRoom)
 	mux.HandleFunc("/api/rooms/join", h.handleJoinSignedRoom)
 	mux.HandleFunc("/api/rooms/owned", h.handleOwnedSignedRooms)
+	mux.HandleFunc("/api/rooms/history", h.handleRoomHistory)
 	mux.HandleFunc("/api/rooms/delete", h.handleDeleteSignedRoom)
 	mux.HandleFunc("/api/rooms/status", h.handleSignedRoomStatus)
 	mux.HandleFunc("/api/rooms/config", h.handleSignedRoomConfig)

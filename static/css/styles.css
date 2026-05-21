@@ -289,11 +289,21 @@ body {
   font-size: 13px;
 }
 
+.inactive-room-item {
+  opacity: 0.72;
+}
+
 .owned-room-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--text-muted);
+}
+
+.owned-room-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .entry-code-badge {
@@ -304,6 +314,27 @@ body {
   border: 1px solid #c4dbe6;
   border-radius: 999px;
   padding: 3px 8px;
+}
+
+.open-room-btn {
+  border: 1px solid #b8d5df;
+  background: #e8f5f8;
+  color: var(--brand-strong);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.open-room-btn:hover {
+  background: #d9edf3;
+}
+
+.open-room-btn:focus-visible {
+  outline: 3px solid rgba(20, 108, 127, 0.28);
+  outline-offset: 2px;
 }
 
 .delete-room-btn {
@@ -330,18 +361,6 @@ body {
 .delete-room-btn:focus-visible {
   outline: 3px solid rgba(179, 29, 29, 0.35);
   outline-offset: 2px;
-}
-
-.watermark {
-  position: absolute;
-  right: -26px;
-  bottom: 20px;
-  transform: rotate(-26deg);
-  font-size: 15px;
-  font-weight: 800;
-  letter-spacing: 1.1px;
-  color: rgba(16, 43, 58, 0.2);
-  pointer-events: none;
 }
 
 .dashboard-message {
@@ -438,7 +457,8 @@ header {
   }
 
   .owned-room-item,
-  .owned-room-meta {
+  .owned-room-meta,
+  .owned-room-actions {
     align-items: flex-start;
     flex-direction: column;
   }

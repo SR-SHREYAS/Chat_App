@@ -45,6 +45,22 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at ON signed_rooms(expires_at);
 	`
 
+	historyTableQuery := `
+	CREATE TABLE IF NOT EXISTS room_memberships (
+		user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		room_name VARCHAR(64) NOT NULL,
+		role VARCHAR(16) NOT NULL CHECK (role IN ('owned', 'joined')),
+		last_visited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY (user_id, room_name, role)
+	);
+	`
+
+	historyIndexQuery := `
+	CREATE INDEX IF NOT EXISTS idx_room_memberships_user_last_visited ON room_memberships(user_id, last_visited_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_room_memberships_room_name ON room_memberships(room_name);
+	`
+
 	minCode := model.SignedRoomEntryCodeMinValue()
 	rangeSize := model.SignedRoomEntryCodeRangeSize()
 	migrateEntryCodeQuery := fmt.Sprintf(`
@@ -64,6 +80,12 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 	}
 	if _, err = tx.ExecContext(ctx, indexQuery); err != nil {
 		return fmt.Errorf("create signed_rooms indexes: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, historyTableQuery); err != nil {
+		return fmt.Errorf("create room_memberships table: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, historyIndexQuery); err != nil {
+		return fmt.Errorf("create room_memberships indexes: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, migrateEntryCodeQuery); err != nil {
 		return fmt.Errorf("migrate signed_rooms entry_code: %w", err)
@@ -164,4 +186,93 @@ func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time
 		return 0, err
 	}
 	return count, nil
+}
+
+func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID int64, roomName, role string) error {
+	query := `
+		INSERT INTO room_memberships (user_id, room_name, role, last_visited_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (user_id, room_name, role)
+		DO UPDATE SET last_visited_at = EXCLUDED.last_visited_at
+	`
+	if _, err := s.db.ExecContext(ctx, query, userID, roomName, role); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID int64, limit int) error {
+	if limit < 1 {
+		limit = 1
+	}
+
+	query := `
+		DELETE FROM room_memberships
+		WHERE user_id = $1
+			AND room_name NOT IN (
+				SELECT room_name
+				FROM (
+					SELECT room_name, MAX(last_visited_at) AS latest_visit
+					FROM room_memberships
+					WHERE user_id = $1
+					GROUP BY room_name
+					ORDER BY latest_visit DESC
+					LIMIT $2
+				) kept_rooms
+			)
+	`
+	_, err := s.db.ExecContext(ctx, query, userID, limit)
+	return err
+}
+
+func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID int64, limit int) ([]model.RoomHistory, error) {
+	if limit < 1 {
+		limit = 1
+	}
+
+	query := `
+		WITH kept_rooms AS (
+			SELECT room_name, MAX(last_visited_at) AS latest_visit
+			FROM room_memberships
+			WHERE user_id = $1
+			GROUP BY room_name
+			ORDER BY latest_visit DESC
+			LIMIT $2
+		)
+		SELECT
+			h.room_name,
+			h.role,
+			COALESCE(sr.owner_display_name, ''),
+			COALESCE(sr.entry_code, ''),
+			sr.expires_at,
+			h.last_visited_at,
+			COALESCE(sr.room_name IS NOT NULL AND sr.expires_at > NOW(), false) AS active
+		FROM room_memberships h
+		INNER JOIN kept_rooms kr ON kr.room_name = h.room_name
+		LEFT JOIN signed_rooms sr ON sr.room_name = h.room_name
+		WHERE h.user_id = $1
+		ORDER BY active DESC, h.last_visited_at DESC
+	`
+	rows, err := s.db.QueryContext(ctx, query, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []model.RoomHistory
+	for rows.Next() {
+		var item model.RoomHistory
+		var expiresAt sql.NullTime
+		if err := rows.Scan(&item.RoomName, &item.Role, &item.OwnerDisplayName, &item.EntryCode, &expiresAt, &item.LastVisitedAt, &item.Active); err != nil {
+			return nil, err
+		}
+		if expiresAt.Valid {
+			item.ExpiresAt = expiresAt.Time
+		}
+		history = append(history, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return history, nil
 }

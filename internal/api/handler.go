@@ -135,6 +135,9 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomName, authUser.ID); err != nil {
+			log.Printf("Could not record signed room join for user=%d room=%s: %v", authUser.ID, roomName, err)
+		}
 		h.resetSignedRoomJoinFailures(joinScope)
 	}
 
