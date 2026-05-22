@@ -152,6 +152,27 @@ function renderRoomHistorySlide(index, rooms) {
       actions.appendChild(deleteBtn);
     }
 
+    if (!room.active && room.role === "owned") {
+      const reviveBtn = document.createElement("button");
+      reviveBtn.className = "revive-room-btn";
+      reviveBtn.type = "button";
+      reviveBtn.textContent = "Revive";
+      reviveBtn.addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) {
+          return;
+        }
+
+        button.disabled = true;
+        try {
+          await reviveSignedRoom(room.room_name);
+        } catch (_err) {
+          button.disabled = false;
+        }
+      });
+      actions.appendChild(reviveBtn);
+    }
+
     row.append(name, meta, actions);
     list.appendChild(row);
   });
@@ -386,6 +407,51 @@ async function deleteSignedRoom(roomName) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err || "Could not delete room");
     setMessage(msg || "Could not delete room", true);
+    throw err;
+  }
+}
+
+async function reviveSignedRoom(roomName) {
+  if (!roomName) {
+    return;
+  }
+
+  const ttlParsed = parseTTLMinutes();
+  if (ttlParsed && ttlParsed.error) {
+    setMessage(ttlParsed.error, true);
+    throw new Error(ttlParsed.error);
+  }
+
+  const body = { room_name: roomName };
+  if (ttlParsed && ttlParsed.value) {
+    body.ttl_minutes = ttlParsed.value;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch("/api/rooms/revive", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not revive room");
+    }
+
+    if (payload.entry_code) {
+      ChatEntryCode.persistEntryCodeForRoom(roomName, payload.entry_code);
+    }
+    await loadRoomHistory();
+    setMessage(`Revived room "${roomName}".`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err || "Could not revive room");
+    setMessage(msg || "Could not revive room", true);
     throw err;
   }
 }

@@ -337,6 +337,32 @@ body {
   outline-offset: 2px;
 }
 
+.revive-room-btn {
+  border: 1px solid #b8d8c6;
+  background: #e9f7ef;
+  color: #1d6b3d;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.revive-room-btn:hover {
+  background: #d8f0e2;
+}
+
+.revive-room-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.revive-room-btn:focus-visible {
+  outline: 3px solid rgba(29, 107, 61, 0.28);
+  outline-offset: 2px;
+}
+
 .delete-room-btn {
   border: 1px solid #efc3c3;
   background: #fff1f1;
