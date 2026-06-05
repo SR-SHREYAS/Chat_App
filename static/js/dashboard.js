@@ -145,7 +145,7 @@ function renderRoomHistorySlide(index, rooms) {
 
         button.disabled = true;
         try {
-          await extendSignedRoom(room.room_name);
+          await extendSignedRoom(room);
         } catch (_err) {
           button.disabled = false;
         }
@@ -259,7 +259,7 @@ function normalizeRoomInput() {
   return roomInput.value.trim();
 }
 
-function parseTTLMinutes() {
+function parseTTLMinutes(options = {}) {
   const raw = String(ttlMinutesInput.value || "").trim();
   if (!raw) {
     return null;
@@ -271,6 +271,16 @@ function parseTTLMinutes() {
   }
   if (minutes > state.ttlConfig.maxMinutes) {
     return { error: `TTL cannot exceed ${state.ttlConfig.maxMinutes} minutes` };
+  }
+  if (options.currentExpiresAt) {
+    const expiresAt = new Date(options.currentExpiresAt);
+    if (!Number.isNaN(expiresAt.getTime())) {
+      const extendedUntil = expiresAt.getTime() + minutes * 60 * 1000;
+      const capacityLimit = Date.now() + state.ttlConfig.maxCapacityMinutes * 60 * 1000;
+      if (extendedUntil > capacityLimit) {
+        return { error: `Room expiry cannot exceed ${state.ttlConfig.maxCapacityMinutes} minutes from now` };
+      }
+    }
   }
   return { value: minutes };
 }
@@ -480,12 +490,13 @@ async function reviveSignedRoom(roomName) {
   }
 }
 
-async function extendSignedRoom(roomName) {
+async function extendSignedRoom(room) {
+  const roomName = room && room.room_name;
   if (!roomName) {
     return;
   }
 
-  const ttlParsed = parseTTLMinutes();
+  const ttlParsed = parseTTLMinutes({ currentExpiresAt: room.expires_at });
   if (ttlParsed && ttlParsed.error) {
     setMessage(ttlParsed.error, true);
     throw new Error(ttlParsed.error);
