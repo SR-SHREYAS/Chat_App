@@ -65,6 +65,14 @@ func (s *MessageStore) GetRecentMessages(ctx context.Context, roomName string, l
 	return messages, nil
 }
 
+func (s *MessageStore) DeleteRoomMessages(ctx context.Context, roomName string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM messages
+		WHERE room_name = $1
+	`, roomName)
+	return err
+}
+
 func (s *MessageStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }

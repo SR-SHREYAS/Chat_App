@@ -1,0 +1,157 @@
+package chat
+
+import (
+	"context"
+	"encoding/json"
+	"sync"
+	"testing"
+	"time"
+
+	"real_time_chat_app/internal/model"
+)
+
+type messageRetentionStore struct {
+	mu             sync.Mutex
+	recent         []model.Message
+	recentCalls    int
+	deletedRooms   []string
+	savedMessages  []model.Message
+	savedRoomNames []string
+}
+
+func (s *messageRetentionStore) SaveMessage(_ context.Context, roomName, userName, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.savedRoomNames = append(s.savedRoomNames, roomName)
+	s.savedMessages = append(s.savedMessages, model.Message{
+		UserName: userName,
+		Message:  message,
+	})
+	return nil
+}
+
+func (s *messageRetentionStore) GetRecentMessages(_ context.Context, _ string, _ int) ([]model.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.recentCalls++
+	out := make([]model.Message, len(s.recent))
+	copy(out, s.recent)
+	return out, nil
+}
+
+func (s *messageRetentionStore) DeleteRoomMessages(_ context.Context, roomName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.deletedRooms = append(s.deletedRooms, roomName)
+	return nil
+}
+
+func (s *messageRetentionStore) Ping(context.Context) error { return nil }
+
+func (s *messageRetentionStore) RecentCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recentCalls
+}
+
+func (s *messageRetentionStore) DeletedRooms() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]string, len(s.deletedRooms))
+	copy(out, s.deletedRooms)
+	return out
+}
+
+func TestHandleRoom_ReplaysHistoryOnlyWhenPersistenceEnabled(t *testing.T) {
+	store := &messageRetentionStore{
+		recent: []model.Message{
+			{UserName: "owner", Message: "hello signed room"},
+		},
+	}
+	service := NewService(store)
+
+	_, signedClient := service.HandleRoom(context.Background(), nil, "alpha", "u1", "owner", true)
+
+	var payload map[string]string
+	select {
+	case raw := <-signedClient.receive:
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal replayed payload: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("expected persisted signed-room history to be replayed")
+	}
+
+	if payload["message"] != "hello signed room" {
+		t.Fatalf("expected signed-room history message, got %+v", payload)
+	}
+	if store.RecentCalls() != 1 {
+		t.Fatalf("expected one recent-message query, got %d", store.RecentCalls())
+	}
+
+	_, guestClient := service.HandleRoom(context.Background(), nil, "beta", "u2", "", false)
+	select {
+	case raw := <-guestClient.receive:
+		t.Fatalf("expected unsigned room to skip replay, got %s", string(raw))
+	default:
+	}
+	if store.RecentCalls() != 1 {
+		t.Fatalf("expected unsigned room to avoid recent-message query, got %d calls", store.RecentCalls())
+	}
+}
+
+func TestHandleDeleteSignedRoom_DeletesStoredMessages(t *testing.T) {
+	messageStore := &messageRetentionStore{}
+	roomStore := newFakeSignedRoomStore()
+	roomStore.rooms["alpha"] = model.SignedRoom{
+		RoomName:         "alpha",
+		OwnerUserID:      1,
+		OwnerDisplayName: "owner",
+		EntryCode:        "1234",
+		ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+	}
+
+	service := NewService(messageStore)
+	service.BindSignedRoomStore(roomStore)
+
+	if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", 1); err != nil {
+		t.Fatalf("delete signed room: %v", err)
+	}
+
+	deleted := messageStore.DeletedRooms()
+	if len(deleted) != 1 || deleted[0] != "alpha" {
+		t.Fatalf("expected stored messages for alpha to be deleted, got %+v", deleted)
+	}
+}
+
+func TestHandleGetSignedRoomStatus_DeletesMessagesForExpiredRoom(t *testing.T) {
+	messageStore := &messageRetentionStore{}
+	roomStore := newFakeSignedRoomStore()
+	roomStore.rooms["expired"] = model.SignedRoom{
+		RoomName:         "expired",
+		OwnerUserID:      1,
+		OwnerDisplayName: "owner",
+		EntryCode:        "1234",
+		ExpiresAt:        time.Now().UTC().Add(-time.Minute),
+	}
+
+	service := NewService(messageStore)
+	service.BindSignedRoomStore(roomStore)
+
+	_, exists, err := service.HandleGetSignedRoomStatus(context.Background(), "expired")
+	if err == nil {
+		t.Fatalf("expected expired room error")
+	}
+	if exists {
+		t.Fatalf("expected expired room to no longer exist")
+	}
+
+	deleted := messageStore.DeletedRooms()
+	if len(deleted) != 1 || deleted[0] != "expired" {
+		t.Fatalf("expected stored messages for expired room to be deleted, got %+v", deleted)
+	}
+}

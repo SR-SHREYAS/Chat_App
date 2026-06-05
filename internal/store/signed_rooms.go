@@ -175,17 +175,30 @@ func (s *SignedRoomStore) DeleteSignedRoomByName(ctx context.Context, roomName s
 	return err
 }
 
-func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) (int64, error) {
-	query := `DELETE FROM signed_rooms WHERE expires_at <= $1`
-	result, err := s.db.ExecContext(ctx, query, now)
+func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
+	query := `
+		DELETE FROM signed_rooms
+		WHERE expires_at <= $1
+		RETURNING room_name
+	`
+	rows, err := s.db.QueryContext(ctx, query, now)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return 0, err
+	defer rows.Close()
+
+	var roomNames []string
+	for rows.Next() {
+		var roomName string
+		if err := rows.Scan(&roomName); err != nil {
+			return nil, err
+		}
+		roomNames = append(roomNames, roomName)
 	}
-	return count, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return roomNames, nil
 }
 
 func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID int64, roomName, role string) error {

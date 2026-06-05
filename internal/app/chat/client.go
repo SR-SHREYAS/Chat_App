@@ -30,6 +30,7 @@ type Client struct {
 	name string
 
 	messages MessageStore
+	persist  bool
 
 	closeOnce sync.Once
 }
@@ -54,14 +55,16 @@ func (c *Client) Read() {
 			continue
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err = c.messages.SaveMessage(ctx, c.room.name, c.name, cleanMessage)
-		cancel()
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				log.Printf("DB timeout while saving message for room=%s user=%s", c.room.name, c.name)
-			} else {
-				log.Printf("Failed to save message to DB: %v", err)
+		if c.persist {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err = c.messages.SaveMessage(ctx, c.room.name, c.name, cleanMessage)
+			cancel()
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					log.Printf("DB timeout while saving message for room=%s user=%s", c.room.name, c.name)
+				} else {
+					log.Printf("Failed to save message to DB: %v", err)
+				}
 			}
 		}
 
