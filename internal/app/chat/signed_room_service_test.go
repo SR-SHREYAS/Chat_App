@@ -96,17 +96,17 @@ func (s *fakeSignedRoomStore) DeleteSignedRoomByName(_ context.Context, roomName
 	return nil
 }
 
-func (s *fakeSignedRoomStore) DeleteExpiredSignedRooms(_ context.Context, now time.Time) (int64, error) {
+func (s *fakeSignedRoomStore) DeleteExpiredSignedRooms(_ context.Context, now time.Time) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.deleteExpiredCalls++
 
-	var removed int64
+	var removed []string
 	for name, room := range s.rooms {
 		if !room.ExpiresAt.After(now) {
 			delete(s.rooms, name)
-			removed++
+			removed = append(removed, name)
 		}
 	}
 	return removed, nil
@@ -177,7 +177,8 @@ func (noopMessageStore) SaveMessage(context.Context, string, string, string) err
 func (noopMessageStore) GetRecentMessages(context.Context, string, int) ([]model.Message, error) {
 	return nil, nil
 }
-func (noopMessageStore) Ping(context.Context) error { return nil }
+func (noopMessageStore) DeleteRoomMessages(context.Context, string) error { return nil }
+func (noopMessageStore) Ping(context.Context) error                       { return nil }
 
 func TestHandleCreateSignedRoom_DefaultTTL(t *testing.T) {
 	store := newFakeSignedRoomStore()
@@ -809,8 +810,8 @@ func (s *errorSignedRoomStore) DeleteSignedRoomByName(context.Context, string) e
 	return s.err
 }
 
-func (s *errorSignedRoomStore) DeleteExpiredSignedRooms(context.Context, time.Time) (int64, error) {
-	return 0, s.err
+func (s *errorSignedRoomStore) DeleteExpiredSignedRooms(context.Context, time.Time) ([]string, error) {
+	return nil, s.err
 }
 
 func (s *errorSignedRoomStore) RecordRoomMembership(context.Context, int64, string, string) error {

@@ -60,6 +60,13 @@ func (s *integrationMessageStore) GetRecentMessages(_ context.Context, roomName 
 	return out, nil
 }
 
+func (s *integrationMessageStore) DeleteRoomMessages(_ context.Context, roomName string) error {
+	s.mu.Lock()
+	delete(s.recent, roomName)
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *integrationMessageStore) Ping(context.Context) error {
 	return s.pingErr
 }
@@ -78,7 +85,7 @@ type chatPayload struct {
 	Message string `json:"message"`
 }
 
-func TestRoomBroadcastAndPersistenceIntegration(t *testing.T) {
+func TestUnsignedRoomBroadcastDoesNotPersistIntegration(t *testing.T) {
 	store := newIntegrationMessageStore(nil)
 	server := startTestServer(t, store)
 
@@ -104,25 +111,12 @@ func TestRoomBroadcastAndPersistenceIntegration(t *testing.T) {
 		t.Fatalf("message mismatch after broadcast: clientA=%+v clientB=%+v", payloadA, payloadB)
 	}
 
-	assertEventually(t, 4*time.Second, func() error {
-		saved := store.SavedMessages()
-		if len(saved) != 1 {
-			return errors.New("waiting for saved message")
-		}
-		if saved[0].roomName != "integration-room" {
-			return errors.New("unexpected room name in saved message")
-		}
-		if saved[0].userName != "user-u1" {
-			return errors.New("unexpected user name in saved message")
-		}
-		if saved[0].message != sent {
-			return errors.New("unexpected body in saved message")
-		}
-		return nil
-	})
+	if saved := store.SavedMessages(); len(saved) != 0 {
+		t.Fatalf("expected unsigned room messages to stay in-memory only, got saved=%+v", saved)
+	}
 }
 
-func TestRoomSendsRecentMessagesOnConnectIntegration(t *testing.T) {
+func TestUnsignedRoomDoesNotReplayRecentMessagesIntegration(t *testing.T) {
 	const roomName = "history-room"
 	store := newIntegrationMessageStore(map[string][]model.Message{
 		roomName: {
@@ -135,11 +129,8 @@ func TestRoomSendsRecentMessagesOnConnectIntegration(t *testing.T) {
 	client := dialRoomSocket(t, server.URL, roomName, "u9")
 	defer client.Close()
 
-	_ = readUntil(t, client, 4*time.Second, func(p chatPayload) bool {
-		return p.Name == "user-alpha" && p.Message == "older message"
-	})
-	_ = readUntil(t, client, 4*time.Second, func(p chatPayload) bool {
-		return p.Name == "user-beta" && p.Message == "newer message"
+	assertFirstPayloadNotMatching(t, client, 500*time.Millisecond, func(p chatPayload) bool {
+		return p.Message == "older message" || p.Message == "newer message"
 	})
 
 	if len(store.SavedMessages()) != 0 {
@@ -207,19 +198,24 @@ func readUntil(t *testing.T, conn *websocket.Conn, timeout time.Duration, match 
 	return chatPayload{}
 }
 
-func assertEventually(t *testing.T, timeout time.Duration, check func() error) {
+func assertFirstPayloadNotMatching(t *testing.T, conn *websocket.Conn, timeout time.Duration, match func(chatPayload) bool) {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		if err := check(); err == nil {
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			return
-		} else {
-			lastErr = err
 		}
-		time.Sleep(50 * time.Millisecond)
+		t.Fatalf("read websocket message: %v", err)
 	}
 
-	t.Fatalf("condition not met before timeout: %v", lastErr)
+	var payload chatPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return
+	}
+	if match(payload) {
+		t.Fatalf("received payload that should not replay for unsigned rooms: %+v", payload)
+	}
 }

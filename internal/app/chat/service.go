@@ -46,6 +46,7 @@ var (
 type MessageStore interface {
 	SaveMessage(ctx context.Context, roomName, userName, message string) error
 	GetRecentMessages(ctx context.Context, roomName string, limit int) ([]model.Message, error)
+	DeleteRoomMessages(ctx context.Context, roomName string) error
 	Ping(ctx context.Context) error
 }
 
@@ -55,7 +56,7 @@ type SignedRoomStore interface {
 	UpdateSignedRoomExpiry(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID int64) ([]model.SignedRoom, error)
 	DeleteSignedRoomByName(ctx context.Context, roomName string) error
-	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) (int64, error)
+	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error)
 	RecordRoomMembership(ctx context.Context, userID int64, roomName, role string) error
 	GetRoomMembership(ctx context.Context, userID int64, roomName, role string) (model.RoomHistory, error)
 	PruneRoomMemberships(ctx context.Context, userID int64, limit int) error
@@ -84,7 +85,7 @@ func (s *Service) BindSignedRoomStore(store SignedRoomStore) {
 	s.roomStore = store
 }
 
-func (s *Service) newClient(socket *websocket.Conn, room *Room, userID, userName string) *Client {
+func (s *Service) newClient(socket *websocket.Conn, room *Room, userID, userName string, persistMessages bool) *Client {
 	name := strings.TrimSpace(userName)
 	if name == "" {
 		name = fmt.Sprintf("user-%s", userID)
@@ -96,10 +97,15 @@ func (s *Service) newClient(socket *websocket.Conn, room *Room, userID, userName
 		receive:  make(chan []byte, MessageBufferSize),
 		name:     name,
 		messages: s.store,
+		persist:  persistMessages,
 	}
 }
 
 func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
+	if !c.persist {
+		return
+	}
+
 	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -126,9 +132,9 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 	log.Printf("Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
 }
 
-func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomName, userID, userName string) (*Room, *Client) {
+func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomName, userID, userName string, persistMessages bool) (*Room, *Client) {
 	room := s.rooms.GetOrCreate(roomName)
-	client := s.newClient(socket, room, userID, userName)
+	client := s.newClient(socket, room, userID, userName, persistMessages)
 	s.sendRecentMessages(ctx, client)
 	return room, client
 }
@@ -257,6 +263,7 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomName string, o
 		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
 			log.Printf("Could not delete expired signed room before extend %s: %v", roomName, err)
 		}
+		s.deleteRoomMessagesBestEffort(ctx, roomName)
 		return model.SignedRoom{}, ErrSignedRoomExpired
 	}
 	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
@@ -353,6 +360,7 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomName string, o
 		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
 			log.Printf("Could not delete expired signed room before revive %s: %v", roomName, err)
 		}
+		s.deleteRoomMessagesBestEffort(ctx, roomName)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return model.SignedRoom{}, err
 	}
@@ -399,13 +407,18 @@ func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomName string, o
 		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
 			log.Printf("Could not delete expired signed room %s: %v", roomName, err)
 		}
+		s.deleteRoomMessagesBestEffort(ctx, roomName)
 		return ErrSignedRoomExpired
 	}
 	if room.OwnerUserID != ownerUserID {
 		return ErrRoomOwnedByAnotherUser
 	}
 
-	return s.roomStore.DeleteSignedRoomByName(ctx, roomName)
+	if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
+		return err
+	}
+	s.deleteRoomMessagesBestEffort(ctx, roomName)
+	return nil
 }
 
 func (s *Service) recordRoomMembershipBestEffort(ctx context.Context, userID int64, roomName, role string) {
@@ -441,6 +454,7 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomName string
 		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
 			log.Printf("Could not delete expired signed room %s: %v", roomName, err)
 		}
+		s.deleteRoomMessagesBestEffort(ctx, roomName)
 		return model.SignedRoom{}, false, ErrSignedRoomExpired
 	}
 
@@ -483,8 +497,12 @@ func generateRoomEntryCode() (string, error) {
 
 func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.Time) error {
 	if s.signedRoomCleanupEvery <= 0 {
-		_, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
-		return err
+		deletedRooms, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+		if err != nil {
+			return err
+		}
+		s.deleteRoomMessagesForRooms(ctx, deletedRooms)
+		return nil
 	}
 
 	s.cleanupMu.Lock()
@@ -498,11 +516,34 @@ func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.T
 		return nil
 	}
 
-	if _, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now); err != nil {
+	deletedRooms, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+	if err != nil {
 		s.cleanupMu.Lock()
 		s.lastSignedRoomCleanup = time.Time{}
 		s.cleanupMu.Unlock()
 		return err
 	}
+	s.deleteRoomMessagesForRooms(ctx, deletedRooms)
 	return nil
+}
+
+func (s *Service) deleteRoomMessagesForRooms(ctx context.Context, roomNames []string) {
+	for _, roomName := range roomNames {
+		s.deleteRoomMessagesBestEffort(ctx, roomName)
+	}
+}
+
+func (s *Service) deleteRoomMessagesBestEffort(ctx context.Context, roomName string) {
+	if s.store == nil {
+		return
+	}
+
+	roomName = strings.TrimSpace(roomName)
+	if roomName == "" {
+		return
+	}
+
+	if err := s.store.DeleteRoomMessages(ctx, roomName); err != nil {
+		log.Printf("Could not delete messages for signed room %s: %v", roomName, err)
+	}
 }

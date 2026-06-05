@@ -141,7 +141,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		h.resetSignedRoomJoinFailures(joinScope)
 	}
 
-	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomName, userID, userName)
+	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomName, userID, userName, hasSignedRoom)
 
 	realRoom.Join(client)
 	defer realRoom.Leave(client)
