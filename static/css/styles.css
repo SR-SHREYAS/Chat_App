@@ -337,6 +337,32 @@ body {
   outline-offset: 2px;
 }
 
+.extend-room-btn {
+  border: 1px solid #d4c27d;
+  background: #fff7d7;
+  color: #765b06;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.extend-room-btn:hover {
+  background: #ffefad;
+}
+
+.extend-room-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.extend-room-btn:focus-visible {
+  outline: 3px solid rgba(118, 91, 6, 0.28);
+  outline-offset: 2px;
+}
+
 .revive-room-btn {
   border: 1px solid #b8d8c6;
   background: #e9f7ef;

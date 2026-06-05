@@ -22,6 +22,7 @@ const (
 	MessageBufferSize     = 256
 	DefaultSignedRoomTTL  = 10 * time.Minute
 	MaxSignedRoomTTL      = 7 * 24 * time.Hour
+	MaxSignedRoomCapacity = 10 * 24 * time.Hour
 	SignedRoomCodeLength  = model.SignedRoomEntryCodeLength
 	signedRoomCleanupTTL  = 1 * time.Minute
 	roomHistoryLimit      = 15
@@ -30,15 +31,16 @@ const (
 )
 
 var (
-	ErrSignedRoomUnavailable   = errors.New("signed room service unavailable")
-	ErrInvalidRoomName         = errors.New("invalid room name")
-	ErrInvalidRoomOwner        = errors.New("invalid room owner")
-	ErrSignedRoomTTLTooLarge   = errors.New("signed room ttl exceeds maximum")
-	ErrSignedRoomNotFound      = errors.New("signed room not found")
-	ErrSignedRoomExpired       = errors.New("signed room expired")
-	ErrSignedRoomAlreadyActive = errors.New("signed room already active")
-	ErrRoomOwnedByAnotherUser  = errors.New("room is owned by another user")
-	ErrInvalidRoomEntryCode    = errors.New("invalid room entry code")
+	ErrSignedRoomUnavailable      = errors.New("signed room service unavailable")
+	ErrInvalidRoomName            = errors.New("invalid room name")
+	ErrInvalidRoomOwner           = errors.New("invalid room owner")
+	ErrSignedRoomTTLTooLarge      = errors.New("signed room ttl exceeds maximum")
+	ErrSignedRoomNotFound         = errors.New("signed room not found")
+	ErrSignedRoomExpired          = errors.New("signed room expired")
+	ErrSignedRoomAlreadyActive    = errors.New("signed room already active")
+	ErrSignedRoomCapacityTooLarge = errors.New("signed room active capacity exceeds maximum")
+	ErrRoomOwnedByAnotherUser     = errors.New("room is owned by another user")
+	ErrInvalidRoomEntryCode       = errors.New("invalid room entry code")
 )
 
 type MessageStore interface {
@@ -219,6 +221,62 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID in
 		log.Printf("Best-effort signed room cleanup failed before list for owner %d: %v", ownerUserID, err)
 	}
 	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
+}
+
+func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName string, ttl time.Duration) (model.SignedRoom, error) {
+	if s.roomStore == nil {
+		return model.SignedRoom{}, ErrSignedRoomUnavailable
+	}
+
+	roomName = strings.TrimSpace(roomName)
+	if roomName == "" {
+		return model.SignedRoom{}, ErrInvalidRoomName
+	}
+	if ownerUserID <= 0 {
+		return model.SignedRoom{}, ErrInvalidRoomOwner
+	}
+
+	normalizedTTL, err := normalizeSignedRoomTTL(ttl)
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+
+	room, err := s.roomStore.GetSignedRoomByName(ctx, roomName)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.SignedRoom{}, ErrSignedRoomNotFound
+		}
+		return model.SignedRoom{}, err
+	}
+
+	now := time.Now().UTC()
+	if room.OwnerUserID != ownerUserID {
+		return model.SignedRoom{}, ErrRoomOwnedByAnotherUser
+	}
+	if !room.ExpiresAt.After(now) {
+		if err := s.roomStore.DeleteSignedRoomByName(ctx, roomName); err != nil {
+			log.Printf("Could not delete expired signed room before extend %s: %v", roomName, err)
+		}
+		return model.SignedRoom{}, ErrSignedRoomExpired
+	}
+	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
+		log.Printf("Best-effort signed room cleanup failed before extend for room %s: %v", roomName, err)
+	}
+
+	newExpiresAt := room.ExpiresAt.Add(normalizedTTL)
+	if newExpiresAt.After(now.Add(MaxSignedRoomCapacity)) {
+		return model.SignedRoom{}, ErrSignedRoomCapacityTooLarge
+	}
+
+	updated, err := s.roomStore.UpdateSignedRoomExpiry(ctx, roomName, ownerUserID, ownerDisplayName, room.EntryCode, newExpiresAt)
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+
+	s.recordRoomMembershipBestEffort(ctx, ownerUserID, roomName, roomHistoryRoleOwned)
+	s.recordRoomMembershipBestEffort(ctx, ownerUserID, roomName, roomHistoryRoleJoined)
+
+	return updated, nil
 }
 
 func (s *Service) HandleRecordSignedRoomJoin(ctx context.Context, roomName string, userID int64) error {

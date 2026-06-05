@@ -29,6 +29,7 @@ const state = {
   ttlConfig: {
     defaultMinutes: 10,
     maxMinutes: 10080,
+    maxCapacityMinutes: 14400,
   },
 };
 
@@ -132,6 +133,25 @@ function renderRoomHistorySlide(index, rooms) {
     }
 
     if (room.active && room.role === "owned") {
+      const extendBtn = document.createElement("button");
+      extendBtn.className = "extend-room-btn";
+      extendBtn.type = "button";
+      extendBtn.textContent = "Extend";
+      extendBtn.addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) {
+          return;
+        }
+
+        button.disabled = true;
+        try {
+          await extendSignedRoom(room.room_name);
+        } catch (_err) {
+          button.disabled = false;
+        }
+      });
+      actions.appendChild(extendBtn);
+
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "delete-room-btn";
       deleteBtn.type = "button";
@@ -269,6 +289,7 @@ async function loadRoomConfig() {
     const payload = await res.json().catch(() => ({}));
     const max = Number.parseInt(payload.max_ttl_minutes, 10);
     const def = Number.parseInt(payload.default_ttl_minutes, 10);
+    const maxCapacity = Number.parseInt(payload.max_capacity_minutes, 10);
     const entryCodeLength = Number.parseInt(payload.entry_code_length, 10);
 
     if (Number.isFinite(max) && max > 0) {
@@ -278,6 +299,9 @@ async function loadRoomConfig() {
     if (Number.isFinite(def) && def > 0) {
       state.ttlConfig.defaultMinutes = def;
       ttlMinutesInput.placeholder = String(def);
+    }
+    if (Number.isFinite(maxCapacity) && maxCapacity > 0) {
+      state.ttlConfig.maxCapacityMinutes = maxCapacity;
     }
     if (Number.isFinite(entryCodeLength) && entryCodeLength > 0) {
       ChatEntryCode.setEntryCodeLength(entryCodeLength);
@@ -452,6 +476,51 @@ async function reviveSignedRoom(roomName) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err || "Could not revive room");
     setMessage(msg || "Could not revive room", true);
+    throw err;
+  }
+}
+
+async function extendSignedRoom(roomName) {
+  if (!roomName) {
+    return;
+  }
+
+  const ttlParsed = parseTTLMinutes();
+  if (ttlParsed && ttlParsed.error) {
+    setMessage(ttlParsed.error, true);
+    throw new Error(ttlParsed.error);
+  }
+
+  const body = { room_name: roomName };
+  if (ttlParsed && ttlParsed.value) {
+    body.ttl_minutes = ttlParsed.value;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch("/api/rooms/extend", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not extend room");
+    }
+
+    if (payload.entry_code) {
+      ChatEntryCode.persistEntryCodeForRoom(roomName, payload.entry_code);
+    }
+    await loadRoomHistory();
+    setMessage(`Extended room "${roomName}".`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err || "Could not extend room");
+    setMessage(msg || "Could not extend room", true);
     throw err;
   }
 }
