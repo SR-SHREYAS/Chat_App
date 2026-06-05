@@ -543,7 +543,10 @@ func (s *Service) deleteRoomMessagesBestEffort(ctx context.Context, roomName str
 		return
 	}
 
-	if err := s.store.DeleteRoomMessages(ctx, roomName); err != nil {
+	deleteCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	if err := s.store.DeleteRoomMessages(deleteCtx, roomName); err != nil {
 		log.Printf("Could not delete messages for signed room %s: %v", roomName, err)
 	}
 }

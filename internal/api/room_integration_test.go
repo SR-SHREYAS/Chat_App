@@ -201,21 +201,30 @@ func readUntil(t *testing.T, conn *websocket.Conn, timeout time.Duration, match 
 func assertFirstPayloadNotMatching(t *testing.T, conn *websocket.Conn, timeout time.Duration, match func(chatPayload) bool) {
 	t.Helper()
 
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return
 		}
-		t.Fatalf("read websocket message: %v", err)
-	}
 
-	var payload chatPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		t.Fatalf("unmarshal websocket payload: %v", err)
-	}
-	if match(payload) {
-		t.Fatalf("received payload that should not replay for unsigned rooms: %+v", payload)
+		_ = conn.SetReadDeadline(time.Now().Add(remaining))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return
+			}
+			t.Fatalf("read websocket message: %v", err)
+		}
+
+		var payload chatPayload
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal websocket payload: %v", err)
+		}
+		if match(payload) {
+			t.Fatalf("received payload that should not replay for unsigned rooms: %+v", payload)
+		}
 	}
 }
