@@ -213,7 +213,7 @@ func assertFirstPayloadNotMatching(t *testing.T, conn *websocket.Conn, timeout t
 
 	var payload chatPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return
+		t.Fatalf("unmarshal websocket payload: %v", err)
 	}
 	if match(payload) {
 		t.Fatalf("received payload that should not replay for unsigned rooms: %+v", payload)

@@ -193,6 +193,7 @@ func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time
 		if err := rows.Scan(&roomName); err != nil {
 			return nil, err
 		}
+		roomNames = append(roomNames, roomName)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
