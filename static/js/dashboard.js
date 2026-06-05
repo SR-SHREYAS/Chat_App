@@ -278,7 +278,9 @@ function parseTTLMinutes(options = {}) {
       const extendedUntil = expiresAt.getTime() + minutes * 60 * 1000;
       const capacityLimit = Date.now() + state.ttlConfig.maxCapacityMinutes * 60 * 1000;
       if (extendedUntil > capacityLimit) {
-        return { error: `Room expiry cannot exceed ${state.ttlConfig.maxCapacityMinutes} minutes from now` };
+        console.warn(
+          `Requested room expiry exceeds client-side capacity window of ${state.ttlConfig.maxCapacityMinutes} minutes from now; relying on server-side validation instead.`
+        );
       }
     }
   }
