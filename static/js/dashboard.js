@@ -339,7 +339,7 @@ async function createSignedRoom() {
   }
 
   const body = { room_name: room };
-  if (ttlParsed && ttlParsed.value) {
+  if (ttlParsed && ttlParsed.value != null) {
     body.ttl_minutes = ttlParsed.value;
   }
 
@@ -457,7 +457,7 @@ async function reviveSignedRoom(roomName) {
   }
 
   const body = { room_name: roomName };
-  if (ttlParsed && ttlParsed.value) {
+  if (ttlParsed && ttlParsed.value != null) {
     body.ttl_minutes = ttlParsed.value;
   }
 
@@ -503,7 +503,7 @@ async function extendSignedRoom(room) {
   }
 
   const body = { room_name: roomName };
-  if (ttlParsed && ttlParsed.value) {
+  if (ttlParsed && ttlParsed.value != null) {
     body.ttl_minutes = ttlParsed.value;
   }
 
