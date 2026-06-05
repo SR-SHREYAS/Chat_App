@@ -545,6 +545,88 @@ func TestHandleRecordSignedRoomJoinAndListHistory(t *testing.T) {
 	}
 }
 
+func TestHandleExtendSignedRoom(t *testing.T) {
+	t.Run("owner extends active room and keeps entry code", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		originalExpiry := time.Now().UTC().Add(2 * time.Hour)
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        originalExpiry,
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		room, err := service.HandleExtendSignedRoom(context.Background(), "alpha", 1, "owner", 30*time.Minute)
+		if err != nil {
+			t.Fatalf("extend signed room: %v", err)
+		}
+		if room.EntryCode != "1234" {
+			t.Fatalf("expected entry code to stay the same, got %q", room.EntryCode)
+		}
+		if !room.ExpiresAt.After(originalExpiry) {
+			t.Fatalf("expected expiry to move forward")
+		}
+	})
+
+	t.Run("rejects other owner", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(2 * time.Hour),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		if _, err := service.HandleExtendSignedRoom(context.Background(), "alpha", 2, "other", 30*time.Minute); !errors.Is(err, ErrRoomOwnedByAnotherUser) {
+			t.Fatalf("expected ErrRoomOwnedByAnotherUser, got %v", err)
+		}
+	})
+
+	t.Run("rejects expired room", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(-1 * time.Minute),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		if _, err := service.HandleExtendSignedRoom(context.Background(), "alpha", 1, "owner", 30*time.Minute); !errors.Is(err, ErrSignedRoomExpired) {
+			t.Fatalf("expected ErrSignedRoomExpired, got %v", err)
+		}
+	})
+
+	t.Run("rejects capacity above ten days", func(t *testing.T) {
+		store := newFakeSignedRoomStore()
+		store.rooms["alpha"] = model.SignedRoom{
+			RoomName:         "alpha",
+			OwnerUserID:      1,
+			OwnerDisplayName: "owner",
+			EntryCode:        "1234",
+			ExpiresAt:        time.Now().UTC().Add(9 * 24 * time.Hour),
+		}
+
+		service := NewService(noopMessageStore{})
+		service.BindSignedRoomStore(store)
+
+		if _, err := service.HandleExtendSignedRoom(context.Background(), "alpha", 1, "owner", 2*24*time.Hour); !errors.Is(err, ErrSignedRoomCapacityTooLarge) {
+			t.Fatalf("expected ErrSignedRoomCapacityTooLarge, got %v", err)
+		}
+	})
+}
+
 func TestHandleReviveSignedRoom(t *testing.T) {
 	t.Run("owner revives inactive room", func(t *testing.T) {
 		store := newFakeSignedRoomStore()

@@ -23,6 +23,11 @@ type reviveSignedRoomRequest struct {
 	TTLMinutes int    `json:"ttl_minutes"`
 }
 
+type extendSignedRoomRequest struct {
+	RoomName   string `json:"room_name"`
+	TTLMinutes int    `json:"ttl_minutes"`
+}
+
 type joinSignedRoomRequest struct {
 	RoomName  string `json:"room_name"`
 	EntryCode string `json:"entry_code"`
@@ -64,9 +69,10 @@ type roomHistoryItemEnvelope struct {
 }
 
 type signedRoomConfigEnvelope struct {
-	DefaultTTLMinutes int `json:"default_ttl_minutes"`
-	MaxTTLMinutes     int `json:"max_ttl_minutes"`
-	EntryCodeLength   int `json:"entry_code_length"`
+	DefaultTTLMinutes  int `json:"default_ttl_minutes"`
+	MaxTTLMinutes      int `json:"max_ttl_minutes"`
+	MaxCapacityMinutes int `json:"max_capacity_minutes"`
+	EntryCodeLength    int `json:"entry_code_length"`
 }
 
 func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request) {
@@ -86,18 +92,11 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if req.TTLMinutes < 0 {
-		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ttl must be non-negative"})
+	ttl, ok := parseSignedRoomTTLMinutes(w, req.TTLMinutes)
+	if !ok {
 		return
 	}
 
-	maxMinutes := int(chat.MaxSignedRoomTTL / time.Minute)
-	if req.TTLMinutes > maxMinutes {
-		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
-		return
-	}
-
-	ttl := time.Duration(req.TTLMinutes) * time.Minute
 	room, err := h.chatService.HandleCreateSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
@@ -124,19 +123,43 @@ func (h *Handler) handleReviveSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if req.TTLMinutes < 0 {
-		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ttl must be non-negative"})
+	ttl, ok := parseSignedRoomTTLMinutes(w, req.TTLMinutes)
+	if !ok {
 		return
 	}
 
-	maxMinutes := int(chat.MaxSignedRoomTTL / time.Minute)
-	if req.TTLMinutes > maxMinutes {
-		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
-		return
-	}
-
-	ttl := time.Duration(req.TTLMinutes) * time.Minute
 	room, err := h.chatService.HandleReviveSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
+	if err != nil {
+		h.writeSignedRoomError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true, true))
+}
+
+func (h *Handler) handleExtendSignedRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authUser, ok := h.requireAuthenticatedUser(w, r)
+	if !ok {
+		return
+	}
+
+	var req extendSignedRoomRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "invalid request body"})
+		return
+	}
+
+	ttl, ok := parseSignedRoomTTLMinutes(w, req.TTLMinutes)
+	if !ok {
+		return
+	}
+
+	room, err := h.chatService.HandleExtendSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
 		return
@@ -152,9 +175,10 @@ func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, signedRoomConfigEnvelope{
-		DefaultTTLMinutes: int(chat.DefaultSignedRoomTTL / time.Minute),
-		MaxTTLMinutes:     int(chat.MaxSignedRoomTTL / time.Minute),
-		EntryCodeLength:   chat.SignedRoomCodeLength,
+		DefaultTTLMinutes:  int(chat.DefaultSignedRoomTTL / time.Minute),
+		MaxTTLMinutes:      int(chat.MaxSignedRoomTTL / time.Minute),
+		MaxCapacityMinutes: int(chat.MaxSignedRoomCapacity / time.Minute),
+		EntryCodeLength:    chat.SignedRoomCodeLength,
 	})
 }
 
@@ -314,7 +338,7 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, chat.ErrSignedRoomUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
-	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge):
+	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge), errors.Is(err, chat.ErrSignedRoomCapacityTooLarge):
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrInvalidRoomEntryCode):
 		writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
@@ -329,6 +353,21 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 	default:
 		writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "signed room operation failed"})
 	}
+}
+
+func parseSignedRoomTTLMinutes(w http.ResponseWriter, ttlMinutes int) (time.Duration, bool) {
+	if ttlMinutes < 0 {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ttl must be non-negative"})
+		return 0, false
+	}
+
+	maxMinutes := int(chat.MaxSignedRoomTTL / time.Minute)
+	if ttlMinutes > maxMinutes {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: chat.ErrSignedRoomTTLTooLarge.Error()})
+		return 0, false
+	}
+
+	return time.Duration(ttlMinutes) * time.Minute, true
 }
 
 func (h *Handler) requireAuthenticatedUser(w http.ResponseWriter, r *http.Request) (auth.AuthUser, bool) {
