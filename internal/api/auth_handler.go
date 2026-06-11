@@ -154,7 +154,7 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleUpdateUsername(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return

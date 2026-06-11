@@ -2,21 +2,21 @@
 
 `schema_v2.sql` is the complete normalized schema for a fresh database. Existing
 databases need a one-time data migration because PostgreSQL cannot derive ULIDs
-or reliably infer every old message sender from duplicated display names.
+or reliably infer every old message sender from duplicated usernames.
 
 ## Preflight
 
 Run these checks against the legacy schema before migrating:
 
 ```sql
-SELECT display_name, COUNT(*)
+SELECT username, COUNT(*)
 FROM users
-GROUP BY display_name
+GROUP BY username
 HAVING COUNT(*) > 1;
 
 SELECT m.user_name, COUNT(DISTINCT u.id) AS matching_users
 FROM messages m
-LEFT JOIN users u ON u.display_name = m.user_name
+LEFT JOIN users u ON u.username = m.user_name
 GROUP BY m.user_name
 HAVING COUNT(DISTINCT u.id) <> 1;
 
