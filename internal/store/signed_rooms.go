@@ -35,7 +35,7 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 		id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
 		room_name TEXT NOT NULL CHECK (char_length(room_name) <= 64),
 		owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		entry_code TEXT NOT NULL UNIQUE CHECK (entry_code ~ '^[0-9]{4}$'),
+		entry_code TEXT NOT NULL CHECK (entry_code ~ '^[0-9]{4}$'),
 		expires_at TIMESTAMPTZ NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

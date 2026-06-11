@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -147,6 +148,10 @@ func TestMaxMessageLengthOversizedMessageEmitsErrorAndIsNotPersisted(t *testing.
 func createSignedRoomForTest(t *testing.T, srv *httptest.Server) (roomID, chatURL string) {
 	t.Helper()
 
+	// (VALID_DIRECTORY) 1) Sign up a test user to obtain a session cookie.
+	client := signUpAndGetClient(t, srv)
+
+	// (VALID_DIRECTORY) 2) Create a signed room as that authenticated user.
 	body := `{"room_name":"integration-test-room"}`
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/rooms/create", strings.NewReader(body))
 	if err != nil {
@@ -155,7 +160,7 @@ func createSignedRoomForTest(t *testing.T, srv *httptest.Server) (roomID, chatUR
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := srv.Client().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("create room request failed: %v", err)
 	}
@@ -176,6 +181,44 @@ func createSignedRoomForTest(t *testing.T, srv *httptest.Server) (roomID, chatUR
 		t.Fatalf("missing room_id or chat_url in create room response: %+v", payload)
 	}
 	return payload.RoomID, payload.ChatURL
+}
+
+// (VALID_DIRECTORY) signUpAndGetClient performs a signup request and returns an HTTP client
+// (VALID_DIRECTORY) that carries the session cookie for subsequent authenticated requests.
+func signUpAndGetClient(t *testing.T, srv *httptest.Server) *http.Client {
+	t.Helper()
+
+	// (VALID_DIRECTORY) Use a cookie jar to store the session cookie set by /api/auth/signup.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("failed to create cookie jar: %v", err)
+	}
+	client := &http.Client{
+		Jar: jar,
+	}
+
+	body := `{"email":"testuser@example.com","username":"testuser","password":"password123"}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/auth/signup", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new signup request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("signup request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		var payload map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		t.Fatalf("unexpected signup status: %d payload=%v", resp.StatusCode, payload)
+	}
+
+	// (VALID_DIRECTORY) jar is automatically populated with cookies from the signup response.
+	return client
 }
 
 func makeWebSocketURL(t *testing.T, srv *httptest.Server, pathAndQuery string) string {
