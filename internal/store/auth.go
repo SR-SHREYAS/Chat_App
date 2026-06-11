@@ -15,6 +15,7 @@ import (
 var (
 	ErrDuplicateEmail    = errors.New("duplicate email")
 	ErrDuplicateUsername = errors.New("duplicate username")
+	ErrUserNotFound      = errors.New("user not found")
 )
 
 type AuthStore struct {
@@ -146,6 +147,9 @@ func (s *AuthStore) UpdateUsername(ctx context.Context, userID string, username 
 	err := s.db.QueryRowContext(ctx, query, username, userID).
 		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.User{}, ErrUserNotFound
+		}
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "users_username_key" {
 			return model.User{}, ErrDuplicateUsername

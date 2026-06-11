@@ -181,6 +181,9 @@ func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, userna
 		if errors.Is(err, store.ErrDuplicateUsername) {
 			return AuthUser{}, ErrUsernameAlreadyExists
 		}
+		if errors.Is(err, store.ErrUserNotFound) {
+			return AuthUser{}, ErrInvalidCredentials
+		}
 		return AuthUser{}, err
 	}
 

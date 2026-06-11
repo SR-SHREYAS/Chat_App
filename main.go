@@ -14,62 +14,9 @@ import (
 	"real_time_chat_app/internal/middleware"
 	"real_time_chat_app/internal/store"
 
-	"real_time_chat_app/internal/model"
-
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
-
-// ...existing imports...
-
-type authStoreAdapter struct {
-	*store.AuthStore
-	db *sql.DB
-}
-
-// UpdateUsername updates a user's username based on the userID
-// and returns the updated user to satisfy auth.AuthStore.
-func (a *authStoreAdapter) UpdateUsername(ctx context.Context, userID string, username string) (model.User, error) {
-	// Start a transaction to ensure consistency
-	tx, err := a.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.User{}, err
-	}
-	defer func() {
-		// rollback on panic; commit/rollback handled below
-		if p := recover(); p != nil {
-			_ = tx.Rollback()
-			panic(p)
-		}
-	}()
-
-	// Update username by user ID
-	_, err = tx.ExecContext(ctx,
-		"UPDATE users SET username = $1 WHERE id = $2",
-		username, userID,
-	)
-	if err != nil {
-		_ = tx.Rollback()
-		return model.User{}, err
-	}
-
-	// Load updated user by user ID
-	var u model.User
-	err = tx.QueryRowContext(ctx,
-		"SELECT id, username, email FROM users WHERE id = $1",
-		userID,
-	).Scan(&u.ID, &u.Username, &u.Email)
-	if err != nil {
-		_ = tx.Rollback()
-		return model.User{}, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return model.User{}, err
-	}
-
-	return u, nil
-}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -120,8 +67,7 @@ func main() {
 
 	service := chat.NewService(messageStore)
 	service.BindSignedRoomStore(signedRoomStore)
-	authAdapter := &authStoreAdapter{AuthStore: authStore, db: db}
-	authService := authapp.NewService(authAdapter)
+	authService := authapp.NewService(authStore)
 	handler := api.NewHandler(service, authService)
 
 	mux := http.NewServeMux()
