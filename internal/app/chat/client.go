@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -59,6 +60,10 @@ func (c *Client) Read() {
 		}
 		if utf8.RuneCountInString(cleanMessage) > MaxMessageLen {
 			log.Printf("Dropping oversized chat message for room=%s user=%s", c.room.name, c.userID)
+			c.sendErrorMessage(
+				"message_too_long",
+				fmt.Sprintf("Message too long. Maximum allowed length is %d characters.", MaxMessageLen),
+			)
 			continue
 		}
 
@@ -88,6 +93,10 @@ func (c *Client) Read() {
 
 		c.room.forward <- jsMessage
 	}
+}
+
+func (c *Client) sendErrorMessage(s string, param any) {
+	panic("unimplemented")
 }
 
 func (c *Client) Write() {

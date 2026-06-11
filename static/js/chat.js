@@ -252,6 +252,16 @@ function connect() {
     try {
       const data = JSON.parse(event.data);
 
+      if (data.type === "error" && data.code === "message_too_long") {
+        showStatus("Message too long (max 2000 characters).");
+        setTimeout(() => {
+          if (!roomExpired && socket.readyState === WebSocket.OPEN) {
+            statusDiv.style.display = "none";
+          }
+        }, 4000);
+        return;
+      }
+
       if (data.name === "System") {
         const sysDiv = document.createElement("div");
         sysDiv.classList.add("system-message");
@@ -327,7 +337,17 @@ function sendMessage() {
 
 document.getElementById("sendBtn").addEventListener("click", sendMessage);
 
-document.getElementById("msg").addEventListener("keyup", function (event) {
+const MAX_MESSAGE_LEN = 2000;
+const msgInput = document.getElementById("msg");
+
+msgInput.maxLength = MAX_MESSAGE_LEN;
+msgInput.addEventListener("input", () => {
+  if (msgInput.value.length > MAX_MESSAGE_LEN) {
+    msgInput.value = msgInput.value.slice(0, MAX_MESSAGE_LEN);
+  }
+});
+
+msgInput.addEventListener("keyup", function (event) {
   if (event.key === "Enter") {
     sendMessage();
   }
