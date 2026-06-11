@@ -28,7 +28,7 @@ var (
 	ErrInvalidPassword       = errors.New("invalid password")
 	ErrInvalidDisplayName    = errors.New("invalid display name")
 	ErrEmailAlreadyExists    = errors.New("email already exists")
-	ErrUsernameAlreadyExists = errors.New("display name already exists")
+	ErrUsernameAlreadyExists = errors.New("username already exists")
 	ErrInvalidCredentials    = errors.New("invalid credentials")
 )
 

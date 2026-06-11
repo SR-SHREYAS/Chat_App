@@ -19,7 +19,7 @@ CREATE TABLE user_sessions (
 
 CREATE TABLE signed_rooms (
 	id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
-	room_name TEXT NOT NULL,
+	room_name TEXT NOT NULL CHECK (char_length(room_name) <= 64),
 	owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	entry_code TEXT NOT NULL UNIQUE CHECK (entry_code ~ '^[0-9]{4}$'),
 	expires_at TIMESTAMPTZ NOT NULL,

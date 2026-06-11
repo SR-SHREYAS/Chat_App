@@ -26,18 +26,6 @@ func (s *MessageStore) EnsureSchema(ctx context.Context) error {
 		message TEXT NOT NULL CHECK (char_length(message) <= 2000),
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
-	DO $$
-	BEGIN
-		IF NOT EXISTS (
-			SELECT 1 FROM pg_constraint
-			WHERE conname = 'messages_message_length_check'
-				AND conrelid = 'messages'::regclass
-		) THEN
-			ALTER TABLE messages
-				ADD CONSTRAINT messages_message_length_check
-				CHECK (char_length(message) <= 2000);
-		END IF;
-	END $$;
 	CREATE INDEX IF NOT EXISTS idx_messages_room_id ON messages(room_id);
 	CREATE INDEX IF NOT EXISTS idx_messages_sender_user_id ON messages(sender_user_id);
 	`
