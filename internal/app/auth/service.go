@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/mail"
 	"strings"
 	"time"
@@ -182,7 +183,7 @@ func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, userna
 			return AuthUser{}, ErrUsernameAlreadyExists
 		}
 		if errors.Is(err, store.ErrUserNotFound) {
-			return AuthUser{}, ErrInvalidCredentials
+			return AuthUser{}, fmt.Errorf("user not found for valid session: %w", err)
 		}
 		return AuthUser{}, err
 	}
