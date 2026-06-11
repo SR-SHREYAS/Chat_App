@@ -27,9 +27,9 @@ type authStoreAdapter struct {
 	db *sql.DB
 }
 
-// UpdateUsername updates a user's username based on the old username
+// UpdateUsername updates a user's username based on the userID
 // and returns the updated user to satisfy auth.AuthStore.
-func (a *authStoreAdapter) UpdateUsername(ctx context.Context, oldUsername string, newUsername string) (model.User, error) {
+func (a *authStoreAdapter) UpdateUsername(ctx context.Context, userID string, username string) (model.User, error) {
 	// Start a transaction to ensure consistency
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -43,21 +43,21 @@ func (a *authStoreAdapter) UpdateUsername(ctx context.Context, oldUsername strin
 		}
 	}()
 
-	// Update username
+	// Update username by user ID
 	_, err = tx.ExecContext(ctx,
-		"UPDATE users SET username = $1 WHERE username = $2",
-		newUsername, oldUsername,
+		"UPDATE users SET username = $1 WHERE id = $2",
+		username, userID,
 	)
 	if err != nil {
 		_ = tx.Rollback()
 		return model.User{}, err
 	}
 
-	// Load updated user
+	// Load updated user by user ID
 	var u model.User
 	err = tx.QueryRowContext(ctx,
-		"SELECT id, username, email FROM users WHERE username = $1",
-		newUsername,
+		"SELECT id, username, email FROM users WHERE id = $1",
+		userID,
 	).Scan(&u.ID, &u.Username, &u.Email)
 	if err != nil {
 		_ = tx.Rollback()
