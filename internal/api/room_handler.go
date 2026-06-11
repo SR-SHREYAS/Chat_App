@@ -61,7 +61,7 @@ type roomHistoryItemEnvelope struct {
 	RoomID           string `json:"room_id"`
 	RoomName         string `json:"room_name"`
 	Role             string `json:"role"`
-	OwnerUserName    string `json:"owner_username,omitempty"`
+	OwnerUsername    string `json:"owner_username,omitempty"`
 	EntryCode        string `json:"entry_code,omitempty"`
 	ExpiresAt        string `json:"expires_at,omitempty"`
 	ExpiresInSeconds int64  `json:"expires_in_seconds"`
@@ -410,7 +410,7 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 	out := signedRoomEnvelope{
 		RoomID:           room.ID,
 		RoomName:         room.RoomName,
-		OwnerUsername:    room.OwnerUserName,
+		OwnerUsername:    room.OwnerUsername,
 		ExpiresAt:        room.ExpiresAt.UTC().Format(time.RFC3339),
 		ExpiresInSeconds: expiresIn,
 	}
@@ -443,7 +443,7 @@ func roomHistoryEnvelopeFromModel(item model.RoomHistory) roomHistoryItemEnvelop
 		RoomID:           item.RoomID,
 		RoomName:         item.RoomName,
 		Role:             item.Role,
-		OwnerUserName:    item.OwnerUserName,
+		OwnerUsername:    item.OwnerUsername,
 		ExpiresAt:        expiresAt,
 		ExpiresInSeconds: expiresIn,
 		LastVisitedAt:    item.LastVisitedAt.UTC().Format(time.RFC3339),

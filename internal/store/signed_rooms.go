@@ -123,7 +123,7 @@ func (s *SignedRoomStore) GetSignedRoomByID(ctx context.Context, roomID string) 
 		WHERE sr.id = $1
 	`
 	err := s.db.QueryRowContext(ctx, query, roomID).
-		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUserName, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
+		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUsername, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
 	if err != nil {
 		return model.SignedRoom{}, err
 	}
@@ -163,7 +163,7 @@ func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID 
 	var rooms []model.SignedRoom
 	for rows.Next() {
 		var room model.SignedRoom
-		if err := rows.Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUserName, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt); err != nil {
+		if err := rows.Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUsername, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt); err != nil {
 			return nil, err
 		}
 		rooms = append(rooms, room)
@@ -322,7 +322,7 @@ func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID string
 	for rows.Next() {
 		var item model.RoomHistory
 		var expiresAt sql.NullTime
-		if err := rows.Scan(&item.RoomID, &item.RoomName, &item.Role, &item.OwnerUserID, &item.OwnerUserName, &item.EntryCode, &expiresAt, &item.JoinedAt, &item.LastVisitedAt, &item.Active); err != nil {
+		if err := rows.Scan(&item.RoomID, &item.RoomName, &item.Role, &item.OwnerUserID, &item.OwnerUsername, &item.EntryCode, &expiresAt, &item.JoinedAt, &item.LastVisitedAt, &item.Active); err != nil {
 			return nil, err
 		}
 		if expiresAt.Valid {

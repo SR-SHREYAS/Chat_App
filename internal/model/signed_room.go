@@ -20,7 +20,7 @@ type SignedRoom struct {
 	ID            string
 	RoomName      string
 	OwnerUserID   string
-	OwnerUserName string
+	OwnerUsername string
 	EntryCode     string
 	ExpiresAt     time.Time
 	CreatedAt     time.Time
@@ -32,7 +32,7 @@ type RoomHistory struct {
 	RoomName      string
 	Role          string
 	OwnerUserID   string
-	OwnerUserName string
+	OwnerUsername string
 	EntryCode     string
 	ExpiresAt     time.Time
 	JoinedAt      time.Time

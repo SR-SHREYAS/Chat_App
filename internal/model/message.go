@@ -6,7 +6,7 @@ type Message struct {
 	ID           string
 	RoomID       string
 	SenderUserID string
-	UserName     string
+	Username     string
 	Message      string
 	CreatedAt    time.Time
 }

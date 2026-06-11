@@ -123,11 +123,11 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 	count := 0
 	for _, m := range messages {
 		msgJSON, err := json.Marshal(map[string]string{
-			"name":    m.UserName,
+			"name":    m.Username,
 			"message": m.Message,
 		})
 		if err != nil {
-			log.Printf("Error marshaling message for user %s: %v", m.UserName, err)
+			log.Printf("Error marshaling message for user %s: %v", m.Username, err)
 			continue
 		}
 		c.receive <- msgJSON

@@ -230,7 +230,7 @@ async function loadSession() {
       return false;
     }
 
-    updateDisplayNameUI(payload.user.display_name);
+    updateDisplayNameUI(payload.user.username);
     return true;
   } catch (_err) {
     window.location.href = "/";
@@ -576,21 +576,21 @@ saveNameBtn.addEventListener("click", async () => {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ display_name: displayName }),
+      body: JSON.stringify({ username: displayName }),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(payload.error || "Could not update display name");
+      throw new Error(payload.error || "Could not update username");
     }
-    if (payload.user && payload.user.display_name) {
-      updateDisplayNameUI(payload.user.display_name);
+    if (payload.user && payload.user.username) {
+      updateDisplayNameUI(payload.user.username);
       editNamePanel.classList.add("hidden");
-      setMessage("Display name updated.");
+      setMessage("Username updated.");
       return;
     }
     throw new Error("Unexpected response");
   } catch (err) {
-    setMessage(err.message || "Could not update display name", true);
+    setMessage(err.message || "Could not update username", true);
   }
 });
 

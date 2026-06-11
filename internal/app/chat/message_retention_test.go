@@ -25,7 +25,7 @@ func (s *messageRetentionStore) SaveMessage(_ context.Context, roomName, userNam
 
 	s.savedRoomNames = append(s.savedRoomNames, roomName)
 	s.savedMessages = append(s.savedMessages, model.Message{
-		UserName: userName,
+		Username: userName,
 		Message:  message,
 	})
 	return nil
@@ -69,7 +69,7 @@ func (s *messageRetentionStore) DeletedRooms() []string {
 func TestHandleRoom_ReplaysHistoryOnlyWhenPersistenceEnabled(t *testing.T) {
 	store := &messageRetentionStore{
 		recent: []model.Message{
-			{UserName: "owner", Message: "hello signed room"},
+			{Username: "owner", Message: "hello signed room"},
 		},
 	}
 	service := NewService(store)

@@ -75,7 +75,7 @@ func (s *AuthStore) CreateUser(ctx context.Context, email, username, passwordHas
 		RETURNING id, email, username, created_at, updated_at
 	`
 	err := s.db.QueryRowContext(ctx, query, userID, email, username, passwordHash).
-		Scan(&user.ID, &user.Email, &user.UserName, &user.CreatedAt, &user.UpdatedAt)
+		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
@@ -99,7 +99,7 @@ func (s *AuthStore) GetUserCredentialsByEmail(ctx context.Context, email string)
 		WHERE email = $1
 	`
 	err := s.db.QueryRowContext(ctx, query, email).
-		Scan(&user.ID, &user.Email, &user.UserName, &passwordHash, &user.CreatedAt, &user.UpdatedAt)
+		Scan(&user.ID, &user.Email, &user.Username, &passwordHash, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return model.User{}, "", err
 	}
@@ -127,14 +127,14 @@ func (s *AuthStore) GetUserBySessionHash(ctx context.Context, tokenHash string) 
 	`
 
 	err := s.db.QueryRowContext(ctx, query, tokenHash).
-		Scan(&user.ID, &user.Email, &user.UserName, &user.CreatedAt, &user.UpdatedAt)
+		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return model.User{}, err
 	}
 	return user, nil
 }
 
-func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID string, username string) (model.User, error) {
+func (s *AuthStore) UpdateUsername(ctx context.Context, userID string, username string) (model.User, error) {
 	var user model.User
 	query := `
 		UPDATE users
@@ -144,7 +144,7 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID string, userna
 	`
 
 	err := s.db.QueryRowContext(ctx, query, username, userID).
-		Scan(&user.ID, &user.Email, &user.UserName, &user.CreatedAt, &user.UpdatedAt)
+		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "users_username_key" {

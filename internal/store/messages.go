@@ -58,7 +58,7 @@ func (s *MessageStore) GetRecentMessages(ctx context.Context, roomID string, lim
 	messages := make([]model.Message, 0, limit)
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.ID, &msg.RoomID, &msg.SenderUserID, &msg.UserName, &msg.Message, &msg.CreatedAt); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.RoomID, &msg.SenderUserID, &msg.Username, &msg.Message, &msg.CreatedAt); err != nil {
 			return nil, err
 		}
 		messages = append(messages, msg)

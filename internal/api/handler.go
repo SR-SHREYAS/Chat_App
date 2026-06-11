@@ -108,7 +108,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 
 	userName := ""
 	if isAuth {
-		userName = authUser.DisplayName
+		userName = authUser.Username
 	}
 
 	socket, err := h.upgrader.Upgrade(w, r, nil)
