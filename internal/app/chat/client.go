@@ -101,8 +101,9 @@ func (c *Client) writeMessage(mt int, data []byte) error {
 	defer c.writeMu.Unlock()
 
 	if err := c.socket.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-		return err
+		log.Printf("failed to set write deadline for room=%s user=%s: %v", c.room.name, c.userID, err)
 	}
+
 	return c.socket.WriteMessage(mt, data)
 }
 
