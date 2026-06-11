@@ -13,9 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"real_time_chat_app/internal/app/chat"
 	"real_time_chat_app/internal/model"
+
+	"github.com/gorilla/websocket"
 )
 
 type savedMessage struct {
@@ -120,8 +121,8 @@ func TestUnsignedRoomDoesNotReplayRecentMessagesIntegration(t *testing.T) {
 	const roomName = "history-room"
 	store := newIntegrationMessageStore(map[string][]model.Message{
 		roomName: {
-			{UserName: "user-alpha", Message: "older message"},
-			{UserName: "user-beta", Message: "newer message"},
+			{Username: "user-alpha", Message: "older message"},
+			{Username: "user-beta", Message: "newer message"},
 		},
 	})
 	server := startTestServer(t, store)

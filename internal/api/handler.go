@@ -7,14 +7,14 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
 	"real_time_chat_app/internal/util"
+
+	"github.com/gorilla/websocket"
 )
 
 type Handler struct {
@@ -26,7 +26,7 @@ type Handler struct {
 
 type signedRoomJoinScope struct {
 	clientIP string
-	roomName string
+	roomID   string
 	subject  string
 }
 
@@ -44,8 +44,18 @@ func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 }
 
 func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
-	roomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
-	if roomName == "" {
+	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	unsignedRoomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+	if roomID != "" && unsignedRoomName != "" {
+		http.Error(w, "Ambiguous room parameters: specify only one of room_id or room", http.StatusBadRequest)
+		return
+	}
+
+	roomKey := roomID
+	if roomKey == "" {
+		roomKey = "unsigned:" + unsignedRoomName
+	}
+	if roomID == "" && unsignedRoomName == "" {
 		http.Error(w, "Missing or invalid room parameter", http.StatusBadRequest)
 		return
 	}
@@ -64,7 +74,11 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, hasSignedRoom, err := h.chatService.HandleGetSignedRoomStatus(r.Context(), roomName)
+	hasSignedRoom := false
+	var err error
+	if roomID != "" {
+		_, hasSignedRoom, err = h.chatService.HandleGetSignedRoomStatus(r.Context(), roomID)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, chat.ErrSignedRoomExpired):
@@ -72,9 +86,17 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		case errors.Is(err, chat.ErrSignedRoomUnavailable):
 			log.Printf("Signed room service unavailable: %v", err)
+			http.Error(w, "Signed room service unavailable", http.StatusServiceUnavailable)
+			return
 		default:
 			log.Printf("Could not resolve signed room status: %v", err)
+			http.Error(w, "Could not resolve room", http.StatusInternalServerError)
+			return
 		}
+	}
+	if roomID != "" && !hasSignedRoom {
+		http.Error(w, "Room not found", http.StatusNotFound)
+		return
 	}
 	if hasSignedRoom {
 		if !isAuth {
@@ -82,7 +104,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	joinScope := h.newSignedRoomJoinScope(r, roomName, authUser)
+	joinScope := h.newSignedRoomJoinScope(r, roomKey, authUser)
 
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
 	if userID == "" {
@@ -91,7 +113,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 
 	userName := ""
 	if isAuth {
-		userName = authUser.DisplayName
+		userName = authUser.Username
 	}
 
 	socket, err := h.upgrader.Upgrade(w, r, nil)
@@ -108,12 +130,12 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 
 		entryCode, err := readSignedRoomEntryCodeHandshake(socket)
 		if err != nil {
-			log.Printf("Missing/invalid signed room auth handshake for room %s: %v", roomName, err)
+			log.Printf("Missing/invalid signed room auth handshake for room %s: %v", roomID, err)
 			closeWithPolicyViolation(socket, "entry code required")
 			return
 		}
 
-		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, entryCode); err != nil {
+		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomID, entryCode); err != nil {
 			switch {
 			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
 				h.recordSignedRoomJoinFailure(joinScope)
@@ -130,18 +152,21 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 				closeWithPolicyViolation(socket, "room not found")
 				return
 			default:
-				log.Printf("Could not validate signed room entry for room %s: %v", roomName, err)
+				log.Printf("Could not validate signed room entry for room %s: %v", roomID, err)
 				closeWithPolicyViolation(socket, "room access denied")
 				return
 			}
 		}
-		if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomName, authUser.ID); err != nil {
-			log.Printf("Could not record signed room join for user=%d room=%s: %v", authUser.ID, roomName, err)
+		if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomID, authUser.ID); err != nil {
+			log.Printf("Could not record signed room join for user=%s room=%s: %v", authUser.ID, roomID, err)
 		}
 		h.resetSignedRoomJoinFailures(joinScope)
 	}
 
-	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomName, userID, userName, hasSignedRoom)
+	if isAuth {
+		userID = authUser.ID
+	}
+	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomKey, userID, userName, hasSignedRoom)
 
 	realRoom.Join(client)
 	defer realRoom.Leave(client)
@@ -215,31 +240,31 @@ func (h *Handler) resolveAuthenticatedUser(r *http.Request) (auth.AuthUser, bool
 	return h.authService.HandleMe(r.Context(), token)
 }
 
-func (h *Handler) newSignedRoomJoinScope(r *http.Request, roomName string, authUser auth.AuthUser) signedRoomJoinScope {
+func (h *Handler) newSignedRoomJoinScope(r *http.Request, roomID string, authUser auth.AuthUser) signedRoomJoinScope {
 	return signedRoomJoinScope{
 		clientIP: util.ClientIP(r),
-		roomName: roomName,
+		roomID:   roomID,
 		subject:  signedRoomJoinSubject(authUser),
 	}
 }
 
 func (h *Handler) isSignedRoomJoinBlocked(scope signedRoomJoinScope) bool {
-	return h.signedRoomJoins.IsBlocked(scope.clientIP, scope.roomName, scope.subject)
+	return h.signedRoomJoins.IsBlocked(scope.clientIP, scope.roomID, scope.subject)
 }
 
 func (h *Handler) recordSignedRoomJoinFailure(scope signedRoomJoinScope) {
-	h.signedRoomJoins.RecordFailure(scope.clientIP, scope.roomName, scope.subject)
+	h.signedRoomJoins.RecordFailure(scope.clientIP, scope.roomID, scope.subject)
 }
 
 func (h *Handler) resetSignedRoomJoinFailures(scope signedRoomJoinScope) {
-	h.signedRoomJoins.Reset(scope.clientIP, scope.roomName, scope.subject)
+	h.signedRoomJoins.Reset(scope.clientIP, scope.roomID, scope.subject)
 }
 
 func signedRoomJoinSubject(authUser auth.AuthUser) string {
-	if authUser.ID <= 0 {
+	if authUser.ID == "" {
 		return ""
 	}
-	return "user-" + strconv.FormatInt(authUser.ID, 10)
+	return "user-" + authUser.ID
 }
 
 func closeWithPolicyViolation(socket *websocket.Conn, reason string) {
