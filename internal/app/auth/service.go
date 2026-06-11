@@ -31,6 +31,7 @@ var (
 	ErrEmailAlreadyExists    = errors.New("email already exists")
 	ErrUsernameAlreadyExists = errors.New("username already exists")
 	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrUserNotFound          = errors.New("user not found")
 )
 
 type AuthStore interface {
@@ -183,7 +184,7 @@ func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, userna
 			return AuthUser{}, ErrUsernameAlreadyExists
 		}
 		if errors.Is(err, store.ErrUserNotFound) {
-			return AuthUser{}, fmt.Errorf("user not found for valid session: %w", err)
+			return AuthUser{}, fmt.Errorf("user not found for valid session: %w", ErrUserNotFound)
 		}
 		return AuthUser{}, err
 	}

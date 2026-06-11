@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/app/auth"
-	"real_time_chat_app/internal/store"
 )
 
 type signUpRequest struct {
@@ -186,7 +185,7 @@ func (h *Handler) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
-		case errors.Is(err, store.ErrUserNotFound):
+		case errors.Is(err, auth.ErrUserNotFound):
 			log.Printf("auth: user missing for valid session while updating username: %v", err)
 			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
 		default:
