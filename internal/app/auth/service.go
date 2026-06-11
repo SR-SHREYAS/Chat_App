@@ -24,19 +24,20 @@ const (
 )
 
 var (
-	ErrInvalidEmail       = errors.New("invalid email")
-	ErrInvalidPassword    = errors.New("invalid password")
-	ErrInvalidDisplayName = errors.New("invalid display name")
-	ErrEmailAlreadyExists = errors.New("email already exists")
-	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrInvalidEmail          = errors.New("invalid email")
+	ErrInvalidPassword       = errors.New("invalid password")
+	ErrInvalidDisplayName    = errors.New("invalid display name")
+	ErrEmailAlreadyExists    = errors.New("email already exists")
+	ErrUsernameAlreadyExists = errors.New("display name already exists")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
 )
 
 type AuthStore interface {
 	CreateUser(ctx context.Context, email, displayName, passwordHash string) (model.User, error)
 	GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error)
-	CreateSession(ctx context.Context, userID int64, tokenHash string, expiresAt time.Time) error
+	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error
 	GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error)
-	UpdateDisplayName(ctx context.Context, userID int64, displayName string) (model.User, error)
+	UpdateDisplayName(ctx context.Context, userID string, displayName string) (model.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteExpiredSessions(ctx context.Context) error
 }
@@ -53,7 +54,7 @@ type SignInInput struct {
 }
 
 type AuthUser struct {
-	ID          int64  `json:"id"`
+	ID          string `json:"id"`
 	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
 }
@@ -96,6 +97,9 @@ func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResu
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicateEmail) {
 			return AuthResult{}, ErrEmailAlreadyExists
+		}
+		if errors.Is(err, store.ErrDuplicateUsername) {
+			return AuthResult{}, ErrUsernameAlreadyExists
 		}
 		return AuthResult{}, err
 	}
@@ -174,6 +178,9 @@ func (s *Service) HandleUpdateDisplayName(ctx context.Context, sessionToken, dis
 
 	updatedUser, err := s.store.UpdateDisplayName(ctx, user.ID, displayName)
 	if err != nil {
+		if errors.Is(err, store.ErrDuplicateUsername) {
+			return AuthUser{}, ErrUsernameAlreadyExists
+		}
 		return AuthUser{}, err
 	}
 
@@ -244,6 +251,6 @@ func toAuthUser(user model.User) AuthUser {
 	return AuthUser{
 		ID:          user.ID,
 		Email:       user.Email,
-		DisplayName: user.DisplayName,
+		DisplayName: user.UserName,
 	}
 }

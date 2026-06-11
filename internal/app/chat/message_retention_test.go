@@ -104,45 +104,45 @@ func TestHandleRoom_ReplaysHistoryOnlyWhenPersistenceEnabled(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteSignedRoom_DeletesStoredMessages(t *testing.T) {
+func TestHandleDeleteSignedRoom_ReliesOnCascadeForStoredMessages(t *testing.T) {
 	messageStore := &messageRetentionStore{}
 	roomStore := newFakeSignedRoomStore()
-	roomStore.rooms["alpha"] = model.SignedRoom{
-		RoomName:         "alpha",
-		OwnerUserID:      1,
-		OwnerDisplayName: "owner",
-		EntryCode:        "1234",
-		ExpiresAt:        time.Now().UTC().Add(5 * time.Minute),
+	roomStore.rooms["room-alpha"] = model.SignedRoom{
+		ID:          "room-alpha",
+		RoomName:    "alpha",
+		OwnerUserID: "1",
+		EntryCode:   "1234",
+		ExpiresAt:   time.Now().UTC().Add(5 * time.Minute),
 	}
 
 	service := NewService(messageStore)
 	service.BindSignedRoomStore(roomStore)
 
-	if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", 1); err != nil {
+	if err := service.HandleDeleteSignedRoom(context.Background(), "room-alpha", "1"); err != nil {
 		t.Fatalf("delete signed room: %v", err)
 	}
 
 	deleted := messageStore.DeletedRooms()
-	if len(deleted) != 1 || deleted[0] != "alpha" {
-		t.Fatalf("expected stored messages for alpha to be deleted, got %+v", deleted)
+	if len(deleted) != 0 {
+		t.Fatalf("expected database cascade to delete stored messages, got manual deletes %+v", deleted)
 	}
 }
 
 func TestHandleGetSignedRoomStatus_DeletesMessagesForExpiredRoom(t *testing.T) {
 	messageStore := &messageRetentionStore{}
 	roomStore := newFakeSignedRoomStore()
-	roomStore.rooms["expired"] = model.SignedRoom{
-		RoomName:         "expired",
-		OwnerUserID:      1,
-		OwnerDisplayName: "owner",
-		EntryCode:        "1234",
-		ExpiresAt:        time.Now().UTC().Add(-time.Minute),
+	roomStore.rooms["room-expired"] = model.SignedRoom{
+		ID:          "room-expired",
+		RoomName:    "expired",
+		OwnerUserID: "1",
+		EntryCode:   "1234",
+		ExpiresAt:   time.Now().UTC().Add(-time.Minute),
 	}
 
 	service := NewService(messageStore)
 	service.BindSignedRoomStore(roomStore)
 
-	_, exists, err := service.HandleGetSignedRoomStatus(context.Background(), "expired")
+	_, exists, err := service.HandleGetSignedRoomStatus(context.Background(), "room-expired")
 	if err == nil {
 		t.Fatalf("expected expired room error")
 	}
@@ -151,7 +151,7 @@ func TestHandleGetSignedRoomStatus_DeletesMessagesForExpiredRoom(t *testing.T) {
 	}
 
 	deleted := messageStore.DeletedRooms()
-	if len(deleted) != 1 || deleted[0] != "expired" {
-		t.Fatalf("expected stored messages for expired room to be deleted, got %+v", deleted)
+	if len(deleted) != 1 || deleted[0] != "room-expired" {
+		t.Fatalf("expected stored messages for expired room ID to be deleted, got %+v", deleted)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 )
@@ -17,6 +18,7 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 4 * 1024
+	MaxMessageLen  = 2000
 )
 
 // Client represents a single chatting user.
@@ -27,7 +29,8 @@ type Client struct {
 
 	room *Room
 
-	name string
+	userID string
+	name   string
 
 	messages MessageStore
 	persist  bool
@@ -54,14 +57,18 @@ func (c *Client) Read() {
 		if cleanMessage == "" {
 			continue
 		}
+		if utf8.RuneCountInString(cleanMessage) > MaxMessageLen {
+			log.Printf("Dropping oversized chat message for room=%s user=%s", c.room.name, c.userID)
+			continue
+		}
 
 		if c.persist {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err = c.messages.SaveMessage(ctx, c.room.name, c.name, cleanMessage)
+			err = c.messages.SaveMessage(ctx, c.room.name, c.userID, cleanMessage)
 			cancel()
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					log.Printf("DB timeout while saving message for room=%s user=%s", c.room.name, c.name)
+					log.Printf("DB timeout while saving message for room=%s user=%s", c.room.name, c.userID)
 				} else {
 					log.Printf("Failed to save message to DB: %v", err)
 				}

@@ -1,8 +1,8 @@
 const params = new URLSearchParams(window.location.search);
-const room = params.get("room");
+const roomID = params.get("room_id");
 let roomCode = "";
 
-if (!room) {
+if (!roomID) {
   alert("No room specified. Redirecting to homepage...");
   window.location.href = "/";
 }
@@ -39,7 +39,7 @@ function isValidEntryCode(value) {
 }
 
 function loadRoomEntryCode() {
-  roomCode = ChatEntryCode.loadEntryCodeForRoom(room);
+  roomCode = ChatEntryCode.loadEntryCodeForRoom(roomID);
 }
 
 function parseExpiry(raw) {
@@ -146,7 +146,7 @@ async function resolveRoomExpiryFromAPI() {
   }
 
   try {
-    const res = await fetch(`/api/rooms/status?room=${encodeURIComponent(room)}`, {
+    const res = await fetch(`/api/rooms/status?room_id=${encodeURIComponent(roomID)}`, {
       method: "GET",
       credentials: "same-origin",
       headers: { Accept: "application/json" },
@@ -194,7 +194,7 @@ function connect() {
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const qs = new URLSearchParams({
-    room,
+    room_id: roomID,
     user_id: userId,
   });
   socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);

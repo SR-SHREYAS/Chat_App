@@ -17,21 +17,25 @@ func SignedRoomEntryCodeRangeSize() int64 {
 }
 
 type SignedRoom struct {
-	RoomName         string
-	OwnerUserID      int64
-	OwnerDisplayName string
-	EntryCode        string
-	ExpiresAt        time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID            string
+	RoomName      string
+	OwnerUserID   string
+	OwnerUserName string
+	EntryCode     string
+	ExpiresAt     time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type RoomHistory struct {
-	RoomName         string
-	Role             string
-	OwnerDisplayName string
-	EntryCode        string
-	ExpiresAt        time.Time
-	LastVisitedAt    time.Time
-	Active           bool
+	RoomID        string
+	RoomName      string
+	Role          string
+	OwnerUserID   string
+	OwnerUserName string
+	EntryCode     string
+	ExpiresAt     time.Time
+	JoinedAt      time.Time
+	LastVisitedAt time.Time
+	Active        bool
 }

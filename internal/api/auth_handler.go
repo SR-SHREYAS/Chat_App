@@ -61,7 +61,7 @@ func (h *Handler) handleSignUp(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, auth.ErrInvalidEmail), errors.Is(err, auth.ErrInvalidPassword), errors.Is(err, auth.ErrInvalidDisplayName):
 			writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
-		case errors.Is(err, auth.ErrEmailAlreadyExists):
+		case errors.Is(err, auth.ErrEmailAlreadyExists), errors.Is(err, auth.ErrUsernameAlreadyExists):
 			writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 		default:
 			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "could not create account"})
@@ -180,6 +180,8 @@ func (h *Handler) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request
 		switch {
 		case errors.Is(err, auth.ErrInvalidDisplayName):
 			writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
+		case errors.Is(err, auth.ErrUsernameAlreadyExists):
+			writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
 		default:
