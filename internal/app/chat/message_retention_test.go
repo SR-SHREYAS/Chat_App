@@ -155,3 +155,28 @@ func TestHandleGetSignedRoomStatus_DeletesMessagesForExpiredRoom(t *testing.T) {
 		t.Fatalf("expected stored messages for expired room ID to be deleted, got %+v", deleted)
 	}
 }
+
+func TestExpiredRoomCleanupWithoutIntervalDeletesMessages(t *testing.T) {
+	messageStore := &messageRetentionStore{}
+	roomStore := newFakeSignedRoomStore()
+	roomStore.rooms["room-expired"] = model.SignedRoom{
+		ID:          "room-expired",
+		RoomName:    "expired",
+		OwnerUserID: "1",
+		EntryCode:   "1234",
+		ExpiresAt:   time.Now().UTC().Add(-time.Minute),
+	}
+
+	service := NewService(messageStore)
+	service.BindSignedRoomStore(roomStore)
+	service.signedRoomCleanupEvery = 0
+
+	if _, err := service.HandleListOwnedSignedRooms(context.Background(), "1"); err != nil {
+		t.Fatalf("list owned signed rooms: %v", err)
+	}
+
+	deleted := messageStore.DeletedRooms()
+	if len(deleted) != 1 || deleted[0] != "room-expired" {
+		t.Fatalf("expected unthrottled cleanup to delete expired room messages, got %+v", deleted)
+	}
+}

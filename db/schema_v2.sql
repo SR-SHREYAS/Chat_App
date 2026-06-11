@@ -48,7 +48,7 @@ CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id);
 CREATE INDEX idx_user_sessions_token_hash ON user_sessions(token_hash);
 CREATE INDEX idx_user_sessions_expires_at ON user_sessions(expires_at);
 CREATE INDEX idx_signed_rooms_owner_user_id ON signed_rooms(owner_user_id);
-CREATE INDEX idx_signed_rooms_expires_at ON signed_rooms(expires_at);
+CREATE INDEX idx_signed_rooms_expires_at_id ON signed_rooms(expires_at, id);
 CREATE INDEX idx_room_memberships_user_id ON room_memberships(user_id);
 CREATE INDEX idx_room_memberships_room_id ON room_memberships(room_id);
 CREATE INDEX idx_messages_room_id ON messages(room_id);

@@ -58,7 +58,7 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 
 	indexQuery := `
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_owner_user_id ON signed_rooms(owner_user_id);
-	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at ON signed_rooms(expires_at);
+	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at_id ON signed_rooms(expires_at, id);
 	`
 
 	historyTableQuery := `
@@ -180,30 +180,52 @@ func (s *SignedRoomStore) DeleteSignedRoomByID(ctx context.Context, roomID strin
 	return err
 }
 
-func (s *SignedRoomStore) ListExpiredSignedRoomIDs(ctx context.Context, now time.Time) ([]string, error) {
-	query := `
-		SELECT id
-		FROM signed_rooms
-		WHERE expires_at <= $1
-	`
-	rows, err := s.db.QueryContext(ctx, query, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
+	const batchSize = 1000
 
 	var roomIDs []string
-	for rows.Next() {
-		var roomID string
-		if err := rows.Scan(&roomID); err != nil {
+	for {
+		query := `
+			WITH expired AS (
+				SELECT id
+				FROM signed_rooms
+				WHERE expires_at <= $1
+				ORDER BY expires_at, id
+				LIMIT $2
+			)
+			DELETE FROM signed_rooms sr
+			USING expired e
+			WHERE sr.id = e.id
+			RETURNING sr.id
+		`
+		rows, err := s.db.QueryContext(ctx, query, now, batchSize)
+		if err != nil {
 			return nil, err
 		}
-		roomIDs = append(roomIDs, roomID)
+
+		// Keep batches deterministic and aligned with idx_signed_rooms_expires_at_id.
+		batchIDs := make([]string, 0, batchSize)
+		for rows.Next() {
+			var roomID string
+			if err := rows.Scan(&roomID); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			batchIDs = append(batchIDs, roomID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+
+		roomIDs = append(roomIDs, batchIDs...)
+		if len(batchIDs) < batchSize {
+			return roomIDs, nil
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return roomIDs, nil
 }
 
 func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error {

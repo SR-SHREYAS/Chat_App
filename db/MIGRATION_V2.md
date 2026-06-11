@@ -69,8 +69,8 @@ enforces `signed_rooms.entry_code` uniqueness.
 8. Reject or truncate legacy messages whose length exceeds 2,000 characters
    before inserting into V2.
 9. Verify row counts, foreign keys, and duplicate-name room behavior, then
-   commit. Keep the `legacy_` tables until application verification is complete.
+   commit. Keep the tables in the `legacy_v1` schema until application
+   verification is complete.
 
-Expired signed-room rows should be retained so membership history and revive
-continue to work. Their messages are cleared by the backend. Explicit room
-deletion cascades to memberships and messages.
+Expired signed-room rows are removed by backend cleanup. Deleting a signed room
+cascades to its memberships and messages.

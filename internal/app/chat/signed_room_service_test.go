@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/model"
+
+	"github.com/lib/pq"
 )
 
 type fakeSignedRoomStore struct {
@@ -31,7 +33,7 @@ func (s *fakeSignedRoomStore) CreateSignedRoom(_ context.Context, roomName strin
 
 	if s.createConflicts > 0 {
 		s.createConflicts--
-		return model.SignedRoom{}, duplicateEntryCodeError{}
+		return model.SignedRoom{}, &pq.Error{Code: "23505"}
 	}
 
 	roomID := fmt.Sprintf("fake-%d", time.Now().UnixNano())
@@ -72,7 +74,7 @@ func (s *fakeSignedRoomStore) UpdateSignedRoomExpiry(_ context.Context, roomID s
 
 	if s.updateConflicts > 0 {
 		s.updateConflicts--
-		return model.SignedRoom{}, duplicateEntryCodeError{}
+		return model.SignedRoom{}, &pq.Error{Code: "23505"}
 	}
 
 	room, ok := s.rooms[roomID]
@@ -100,11 +102,6 @@ func (s *fakeSignedRoomStore) UpdateSignedRoomExpiry(_ context.Context, roomID s
 	return room, nil
 }
 
-type duplicateEntryCodeError struct{}
-
-func (duplicateEntryCodeError) Error() string    { return "duplicate entry code" }
-func (duplicateEntryCodeError) SQLState() string { return "23505" }
-
 func (s *fakeSignedRoomStore) ListOwnedSignedRooms(_ context.Context, ownerUserID string) ([]model.SignedRoom, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,7 +126,7 @@ func (s *fakeSignedRoomStore) DeleteSignedRoomByID(_ context.Context, roomID str
 	return nil
 }
 
-func (s *fakeSignedRoomStore) ListExpiredSignedRoomIDs(_ context.Context, now time.Time) ([]string, error) {
+func (s *fakeSignedRoomStore) DeleteExpiredSignedRooms(_ context.Context, now time.Time) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -143,6 +140,7 @@ func (s *fakeSignedRoomStore) ListExpiredSignedRoomIDs(_ context.Context, now ti
 			} else {
 				expired = append(expired, id)
 			}
+			delete(s.rooms, id)
 		}
 	}
 	return expired, nil
@@ -518,7 +516,7 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
-		service.signedRoomCleanupEvery = 0
+		service.signedRoomCleanupEvery = time.Hour
 
 		rooms, err := service.HandleListOwnedSignedRooms(context.Background(), "1")
 		if err != nil {
@@ -532,6 +530,16 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 		}
 		if calls := store.DeleteExpiredCalls(); calls < 1 {
 			t.Fatalf("expected cleanup to run before listing, calls=%d", calls)
+		}
+		if _, err := store.GetSignedRoomByID(context.Background(), "room-exp-1"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected expired room to be deleted during cleanup, got %v", err)
+		}
+
+		if _, err := service.HandleListOwnedSignedRooms(context.Background(), "1"); err != nil {
+			t.Fatalf("list owned signed rooms after cleanup: %v", err)
+		}
+		if calls := store.DeleteExpiredCalls(); calls != 1 {
+			t.Fatalf("expected cleanup deletion to be throttled, calls=%d", calls)
 		}
 	})
 }
@@ -813,7 +821,7 @@ func (s *errorSignedRoomStore) DeleteSignedRoomByID(context.Context, string) err
 	return s.err
 }
 
-func (s *errorSignedRoomStore) ListExpiredSignedRoomIDs(context.Context, time.Time) ([]string, error) {
+func (s *errorSignedRoomStore) DeleteExpiredSignedRooms(context.Context, time.Time) ([]string, error) {
 	return nil, s.err
 }
 

@@ -1,9 +1,9 @@
 const params = new URLSearchParams(window.location.search);
-const roomID = params.get("room_id");
+const roomMode = resolveRoomMode(params);
 let roomCode = "";
 
-if (!roomID) {
-  alert("No room specified. Redirecting to homepage...");
+if (roomMode.error) {
+  alert(roomMode.error);
   window.location.href = "/";
 }
 
@@ -38,8 +38,47 @@ function isValidEntryCode(value) {
   return ChatEntryCode.isValidEntryCode(value);
 }
 
+function resolveRoomMode(params) {
+  const hasSignedRoomParam = params.has("room_id");
+  const hasUnsignedRoomParam = params.has("room");
+  const signedRoomID = hasSignedRoomParam ? params.get("room_id") : "";
+  const unsignedRoomName = hasUnsignedRoomParam ? params.get("room") : "";
+
+  if (hasSignedRoomParam && hasUnsignedRoomParam) {
+    return { error: "Ambiguous room link. Redirecting to homepage..." };
+  }
+
+  if (hasSignedRoomParam && !signedRoomID) {
+    return { error: "Invalid room link. Redirecting to homepage..." };
+  }
+
+  if (hasUnsignedRoomParam && !unsignedRoomName) {
+    return { error: "No room specified. Redirecting to homepage..." };
+  }
+
+  if (!hasSignedRoomParam && !hasUnsignedRoomParam) {
+    return { error: "No room specified. Redirecting to homepage..." };
+  }
+
+  if (hasSignedRoomParam) {
+    return {
+      type: "signed",
+      roomID: signedRoomID,
+      queryParam: "room_id",
+      queryValue: signedRoomID,
+    };
+  }
+
+  return {
+    type: "unsigned",
+    roomID: null,
+    queryParam: "room",
+    queryValue: unsignedRoomName,
+  };
+}
+
 function loadRoomEntryCode() {
-  roomCode = ChatEntryCode.loadEntryCodeForRoom(roomID);
+  roomCode = roomMode.type === "signed" ? ChatEntryCode.loadEntryCodeForRoom(roomMode.roomID) : "";
 }
 
 function parseExpiry(raw) {
@@ -141,12 +180,12 @@ async function loadRoomConfig() {
 }
 
 async function resolveRoomExpiryFromAPI() {
-  if (roomExpiryTime) {
+  if (roomMode.type !== "signed" || roomExpiryTime) {
     return;
   }
 
   try {
-    const res = await fetch(`/api/rooms/status?room_id=${encodeURIComponent(roomID)}`, {
+    const res = await fetch(`/api/rooms/status?room_id=${encodeURIComponent(roomMode.roomID)}`, {
       method: "GET",
       credentials: "same-origin",
       headers: { Accept: "application/json" },
@@ -194,9 +233,9 @@ function connect() {
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const qs = new URLSearchParams({
-    room_id: roomID,
     user_id: userId,
   });
+  qs.set(roomMode.queryParam, roomMode.queryValue);
   socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);
 
   socket.onopen = () => {
@@ -294,16 +333,18 @@ document.getElementById("msg").addEventListener("keyup", function (event) {
   }
 });
 
-loadRoomConfig().finally(() => {
-  loadRoomEntryCode();
-  resolveRoomExpiryFromAPI().finally(() => {
-    renderRoomCode();
-    if (roomExpired) {
-      return;
-    }
-    if (roomExpiryTime) {
-      startCountdown();
-    }
-    connect();
+if (!roomMode.error) {
+  loadRoomConfig().finally(() => {
+    loadRoomEntryCode();
+    resolveRoomExpiryFromAPI().finally(() => {
+      renderRoomCode();
+      if (roomExpired) {
+        return;
+      }
+      if (roomExpiryTime) {
+        startCountdown();
+      }
+      connect();
+    });
   });
-});
+}

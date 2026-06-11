@@ -16,6 +16,7 @@ import (
 	"real_time_chat_app/internal/model"
 
 	"github.com/gorilla/websocket"
+	"github.com/lib/pq"
 )
 
 const (
@@ -59,7 +60,7 @@ type SignedRoomStore interface {
 	UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error)
 	DeleteSignedRoomByID(ctx context.Context, roomID string) error
-	ListExpiredSignedRoomIDs(ctx context.Context, now time.Time) ([]string, error)
+	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error)
 	RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error
 	GetRoomMembership(ctx context.Context, userID string, roomID string) (model.RoomHistory, error)
 	PruneRoomMemberships(ctx context.Context, userID string, limit int) error
@@ -166,7 +167,7 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 	}
 
 	now := time.Now().UTC()
-	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
+	if err := s.maybeDeleteExpiredSignedRooms(ctx, now); err != nil {
 		log.Printf("Best-effort signed room cleanup failed before create for room %s: %v", roomName, err)
 	}
 
@@ -223,7 +224,7 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID st
 		return nil, ErrInvalidRoomOwner
 	}
 
-	if err := s.maybeCleanupExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
+	if err := s.maybeDeleteExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
 		log.Printf("Best-effort signed room cleanup failed before list for owner %s: %v", ownerUserID, err)
 	}
 	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
@@ -260,9 +261,13 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, own
 		return model.SignedRoom{}, ErrRoomOwnedByAnotherUser
 	}
 	if !room.ExpiresAt.After(now) {
+		if err := s.roomStore.DeleteSignedRoomByID(ctx, room.ID); err != nil {
+			log.Printf("Best-effort signed room delete failed for expired room %s: %v", room.ID, err)
+		}
+		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, ErrSignedRoomExpired
 	}
-	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
+	if err := s.maybeDeleteExpiredSignedRooms(ctx, now); err != nil {
 		log.Printf("Best-effort signed room cleanup failed before extend for room %s: %v", roomID, err)
 	}
 
@@ -308,7 +313,7 @@ func (s *Service) HandleListRoomHistory(ctx context.Context, userID string) ([]m
 		return nil, ErrInvalidRoomOwner
 	}
 
-	if err := s.maybeCleanupExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
+	if err := s.maybeDeleteExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
 		log.Printf("Best-effort signed room cleanup failed before history list for user %s: %v", userID, err)
 	}
 	return s.roomStore.ListRoomMemberships(ctx, userID, roomHistoryLimit)
@@ -333,10 +338,6 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 	}
 
 	now := time.Now().UTC()
-	if err := s.maybeCleanupExpiredSignedRooms(ctx, now); err != nil {
-		log.Printf("Best-effort signed room cleanup failed before revive for room %s: %v", roomID, err)
-	}
-
 	existing, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -368,6 +369,10 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 	}
 	if room.ID == "" {
 		return model.SignedRoom{}, ErrRoomEntryCodeUnavailable
+	}
+
+	if err := s.maybeDeleteExpiredSignedRooms(ctx, now); err != nil {
+		log.Printf("Best-effort signed room cleanup failed after revive for room %s: %v", roomID, err)
 	}
 
 	return room, nil
@@ -434,6 +439,9 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomID string) 
 
 	now := time.Now().UTC()
 	if !room.ExpiresAt.After(now) {
+		if err := s.roomStore.DeleteSignedRoomByID(ctx, room.ID); err != nil {
+			log.Printf("Best-effort signed room delete failed for expired room %s: %v", room.ID, err)
+		}
 		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, false, ErrSignedRoomExpired
 	}
@@ -476,13 +484,13 @@ func generateRoomEntryCode() (string, error) {
 }
 
 func isUniqueConstraintViolation(err error) bool {
-	var sqlState interface{ SQLState() string }
-	return errors.As(err, &sqlState) && sqlState.SQLState() == "23505"
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
-func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.Time) error {
+func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Time) error {
 	if s.signedRoomCleanupEvery <= 0 {
-		expiredRoomIDs, err := s.roomStore.ListExpiredSignedRoomIDs(ctx, now)
+		expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
 		if err != nil {
 			return err
 		}
@@ -501,7 +509,7 @@ func (s *Service) maybeCleanupExpiredSignedRooms(ctx context.Context, now time.T
 		return nil
 	}
 
-	expiredRoomIDs, err := s.roomStore.ListExpiredSignedRoomIDs(ctx, now)
+	expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
 	if err != nil {
 		s.cleanupMu.Lock()
 		s.lastSignedRoomCleanup = time.Time{}
