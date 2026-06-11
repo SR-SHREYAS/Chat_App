@@ -46,6 +46,11 @@ func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
 	unsignedRoomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+	if roomID != "" && unsignedRoomName != "" {
+		http.Error(w, "Ambiguous room parameters: specify only one of room_id or room", http.StatusBadRequest)
+		return
+	}
+
 	roomKey := roomID
 	if roomKey == "" {
 		roomKey = "unsigned:" + unsignedRoomName

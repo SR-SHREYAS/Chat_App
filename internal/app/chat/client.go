@@ -36,6 +36,7 @@ type Client struct {
 	messages MessageStore
 	persist  bool
 
+	writeMu   sync.Mutex
 	closeOnce sync.Once
 }
 
@@ -95,6 +96,16 @@ func (c *Client) Read() {
 	}
 }
 
+func (c *Client) writeMessage(mt int, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if err := c.socket.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
+	return c.socket.WriteMessage(mt, data)
+}
+
 func (c *Client) sendErrorMessage(code, message string) {
 	payload := map[string]string{
 		"type":    "error",
@@ -108,12 +119,7 @@ func (c *Client) sendErrorMessage(code, message string) {
 		return
 	}
 
-	if err := c.socket.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-		log.Printf("failed to set write deadline for error message for room=%s user=%s: %v", c.room.name, c.userID, err)
-		// continue anyway; best-effort
-	}
-
-	if err := c.socket.WriteMessage(websocket.TextMessage, data); err != nil {
+	if err := c.writeMessage(websocket.TextMessage, data); err != nil {
 		log.Printf("failed to send error message for room=%s user=%s: %v", c.room.name, c.userID, err)
 	}
 }
@@ -127,16 +133,14 @@ func (c *Client) Write() {
 	for {
 		select {
 		case msg, ok := <-c.receive:
-			_ = c.socket.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				return
 			}
-			if err := c.socket.WriteMessage(websocket.TextMessage, msg); err != nil {
+			if err := c.writeMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
 		case <-ticker.C:
-			_ = c.socket.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.socket.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := c.writeMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		}

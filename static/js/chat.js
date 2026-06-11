@@ -78,7 +78,23 @@ function resolveRoomMode(params) {
 }
 
 function loadRoomEntryCode() {
-  roomCode = roomMode.type === "signed" ? ChatEntryCode.loadEntryCodeForRoom(roomMode.roomID) : "";
+  if (roomMode.type === "signed") {
+    // Primary: key by stable signed room ID.
+    let code = ChatEntryCode.loadEntryCodeForRoom(roomMode.roomID);
+
+    // Backward compatibility: if nothing found, try legacy name-based key.
+    if (!isValidEntryCode(code)) {
+      const legacyKey = params.get("room") || "";
+      if (legacyKey) {
+        code = ChatEntryCode.loadEntryCodeForRoom(legacyKey);
+      }
+    }
+
+    roomCode = code;
+    return;
+  }
+
+  roomCode = "";
 }
 
 function parseExpiry(raw) {

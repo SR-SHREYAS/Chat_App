@@ -43,7 +43,7 @@ func openTestDB(t *testing.T) *sql.DB {
 
 func getenvOrSkip(t *testing.T, name string) string {
 	t.Helper()
-	value := strings.TrimSpace(strings.TrimSpace(getenv(name)))
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		t.Skipf("%s not set; skipping integration test", name)
 	}

@@ -319,6 +319,16 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 	// whether a room has signed-room TTL metadata. Keep it unauthenticated.
 
 	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	unsignedRoomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+	if roomID != "" && unsignedRoomName != "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ambiguous room parameters; specify only room_id"})
+		return
+	}
+	if unsignedRoomName != "" && roomID == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room status is only available for signed rooms by room_id"})
+		return
+	}
+
 	room, exists, err := h.chatService.HandleGetSignedRoomStatus(r.Context(), roomID)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
