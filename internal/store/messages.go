@@ -13,6 +13,11 @@ type MessageStore struct {
 	db *sql.DB
 }
 
+// DB exposes the underlying *sql.DB for integration tests and tooling.
+func (s *MessageStore) DB() *sql.DB {
+	return s.db
+}
+
 func NewMessageStore(db *sql.DB) *MessageStore {
 	return &MessageStore{db: db}
 }
