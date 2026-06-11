@@ -1,7 +1,7 @@
-const displayNameText = document.getElementById("displayNameText");
+const usernameText = document.getElementById("usernameText");
 const editNameBtn = document.getElementById("editNameBtn");
 const editNamePanel = document.getElementById("editNamePanel");
-const displayNameInput = document.getElementById("displayNameInput");
+const usernameInput = document.getElementById("usernameInput");
 const saveNameBtn = document.getElementById("saveNameBtn");
 
 const signoutBtn = document.getElementById("signoutBtn");
@@ -51,9 +51,9 @@ function setMessage(text, isError = false) {
   dashboardMessage.classList.toggle("error", Boolean(isError && text));
 }
 
-function updateDisplayNameUI(name) {
-  displayNameText.textContent = name;
-  displayNameInput.value = name;
+function updateUsernameUI(name) {
+  usernameText.textContent = name;
+  usernameInput.value = name;
 }
 
 function formatExpiry(expiresAt) {
@@ -230,7 +230,7 @@ async function loadSession() {
       return false;
     }
 
-    updateDisplayNameUI(payload.user.username);
+    updateUsernameUI(payload.user.username);
     return true;
   } catch (_err) {
     window.location.href = "/";
@@ -555,35 +555,35 @@ function runPreferredRoomAction() {
 editNameBtn.addEventListener("click", () => {
   editNamePanel.classList.toggle("hidden");
   if (!editNamePanel.classList.contains("hidden")) {
-    displayNameInput.focus();
-    displayNameInput.select();
+    usernameInput.focus();
+    usernameInput.select();
   }
 });
 
 saveNameBtn.addEventListener("click", async () => {
-  const displayName = displayNameInput.value.trim();
-  if (!displayName) {
-    setMessage("Display name cannot be empty.", true);
+  const username = usernameInput.value.trim();
+  if (!username) {
+    setMessage("Username cannot be empty.", true);
     return;
   }
 
   setMessage("");
   try {
-    const res = await fetch("/api/auth/display-name", {
+    const res = await fetch("/api/auth/username", {
       method: "POST",
       credentials: "same-origin",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ username: displayName }),
+      body: JSON.stringify({ username: username }),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       throw new Error(payload.error || "Could not update username");
     }
     if (payload.user && payload.user.username) {
-      updateDisplayNameUI(payload.user.username);
+      updateUsernameUI(payload.user.username);
       editNamePanel.classList.add("hidden");
       setMessage("Username updated.");
       return;

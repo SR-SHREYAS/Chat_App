@@ -29,8 +29,8 @@ signupForm.addEventListener("submit", async (event) => {
 
   const formData = new FormData(signupForm);
   const body = {
-    display_name: String(formData.get("display_name") || ""),
     email: String(formData.get("email") || ""),
+    username: String(formData.get("username") || ""),
     password: String(formData.get("password") || ""),
   };
 
