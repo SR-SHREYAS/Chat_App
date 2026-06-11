@@ -253,7 +253,22 @@ function connect() {
       const data = JSON.parse(event.data);
 
       if (data.type === "error" && data.code === "message_too_long") {
-        showStatus("Message too long (max 2000 characters).");
+        showStatus(`Message too long (max ${MAX_MESSAGE_LEN} characters).`);
+        setTimeout(() => {
+          if (!roomExpired && socket.readyState === WebSocket.OPEN) {
+            statusDiv.style.display = "none";
+          }
+        }, 4000);
+        return;
+      }
+
+      if (data.type === "error") {
+        console.error("Chat error event:", data);
+        const message =
+          typeof data.message === "string" && data.message.trim().length > 0
+            ? data.message
+            : "An error occurred while sending your message. Please try again.";
+        showStatus(message);
         setTimeout(() => {
           if (!roomExpired && socket.readyState === WebSocket.OPEN) {
             statusDiv.style.display = "none";

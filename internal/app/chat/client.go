@@ -95,8 +95,27 @@ func (c *Client) Read() {
 	}
 }
 
-func (c *Client) sendErrorMessage(s string, param any) {
-	panic("unimplemented")
+func (c *Client) sendErrorMessage(code, message string) {
+	payload := map[string]string{
+		"type":    "error",
+		"code":    code,
+		"message": message,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("failed to marshal error message for room=%s user=%s: %v", c.room.name, c.userID, err)
+		return
+	}
+
+	if err := c.socket.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		log.Printf("failed to set write deadline for error message for room=%s user=%s: %v", c.room.name, c.userID, err)
+		// continue anyway; best-effort
+	}
+
+	if err := c.socket.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("failed to send error message for room=%s user=%s: %v", c.room.name, c.userID, err)
+	}
 }
 
 func (c *Client) Write() {
