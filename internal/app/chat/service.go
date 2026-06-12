@@ -207,6 +207,11 @@ func (s *Service) JoinSignedRoom(ctx context.Context, roomName, entryCode string
 		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid room name", nil)
 	}
 
+	entryCode = strings.TrimSpace(entryCode)
+	if entryCode == "" || !isValidRoomEntryCode(entryCode) {
+		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid entry code format", nil)
+	}
+
 	room, err := s.roomStore.GetSignedRoomByNameAndCode(ctx, roomName, entryCode)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -441,6 +446,8 @@ func (s *Service) HandlePurgeSignedRoom(ctx context.Context, roomID string, owne
 	if err := s.roomStore.DeleteSignedRoomByID(ctx, roomID); err != nil {
 		return util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
+	// Best-effort: message deletion errors are logged inside deleteRoomMessagesBestEffort
+	// but do not change the purge outcome.
 	s.deleteRoomMessagesBestEffort(ctx, roomID)
 	return nil
 }
@@ -493,6 +500,18 @@ func normalizeSignedRoomTTL(ttl time.Duration) (time.Duration, error) {
 		return 0, ErrSignedRoomTTLTooLarge
 	}
 	return ttl, nil
+}
+
+func isValidRoomEntryCode(code string) bool {
+	if len(code) != SignedRoomCodeLength {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < '0' || code[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func generateRoomEntryCode() (string, error) {

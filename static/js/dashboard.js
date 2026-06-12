@@ -502,6 +502,7 @@ async function purgeSignedRoom(roomID, roomName) {
     setMessage(`Permanently deleted room "${roomName}".`);
     return true;
   } catch (err) {
+    console.error(err);
     const msg = err instanceof Error ? err.message : String(err || "Could not permanently delete room");
     setMessage(msg || "Could not permanently delete room", true);
     return false;

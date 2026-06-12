@@ -417,9 +417,8 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 	var appErr *util.AppError
 	if errors.As(err, &appErr) {
-		// Log a sanitized, structured view of the internal error to avoid leaking sensitive data.
 		if appErr.Internal != nil {
-			log.Printf("[ERROR] signed room error: type=%T message=%q", appErr.Internal, appErr.Message)
+			log.Printf("[ERROR] signed room error: kind=internal message=%q", appErr.Message)
 		}
 		writeJSON(w, appErr.StatusCode, errorEnvelope{Error: appErr.Message})
 		return
