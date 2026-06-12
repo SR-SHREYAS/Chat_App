@@ -48,10 +48,10 @@ func (s *MessageStore) SaveMessage(ctx context.Context, roomID, senderUserID, me
 
 func (s *MessageStore) GetRecentMessages(ctx context.Context, roomID string, limit int) ([]model.Message, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, room_id, sender_user_id, users.username, message, messages.created_at
+		SELECT messages.id, messages.room_id, messages.sender_user_id, users.username, messages.message, messages.created_at
 		FROM messages
 		INNER JOIN users ON users.id = messages.sender_user_id
-		WHERE room_id = $1
+		WHERE messages.room_id = $1
 		ORDER BY messages.created_at DESC
 		LIMIT $2
 	`, roomID, limit)
