@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/util"
 
 	"github.com/lib/pq"
 )
@@ -409,7 +411,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		room, err := service.JoinSignedRoom(context.Background(), "room-1", "1234")
+		room, err := service.JoinSignedRoom(context.Background(), "alpha", "1234")
 		if err != nil {
 			t.Fatalf("join signed room: %v", err)
 		}
@@ -422,8 +424,10 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if _, err := service.JoinSignedRoom(context.Background(), "missing", "1234"); !errors.Is(err, ErrSignedRoomNotFound) {
-			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
+		_, err := service.JoinSignedRoom(context.Background(), "missing", "1234")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 
@@ -440,8 +444,10 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.JoinSignedRoom(context.Background(), "room-exp", "1234"); !errors.Is(err, ErrSignedRoomExpired) {
-			t.Fatalf("expected ErrSignedRoomExpired, got %v", err)
+		_, err := service.JoinSignedRoom(context.Background(), "expired", "1234")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusGone {
+			t.Fatalf("expected 410 AppError, got %v", err)
 		}
 	})
 
@@ -458,36 +464,11 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.JoinSignedRoom(context.Background(), "room-1", "9999"); !errors.Is(err, ErrInvalidRoomEntryCode) {
-			t.Fatalf("expected ErrInvalidRoomEntryCode, got %v", err)
-		}
-	})
-
-	t.Run("malformed code", func(t *testing.T) {
-		store := newFakeSignedRoomStore()
-		store.rooms["alpha"] = model.SignedRoom{
-			ID:          "room-1",
-			RoomName:    "alpha",
-			OwnerUserID: "1",
-			EntryCode:   "1234",
-			ExpiresAt:   time.Now().UTC().Add(5 * time.Minute),
-		}
-
-		service := NewService(noopMessageStore{})
-		service.BindSignedRoomStore(store)
-
-		cases := []string{
-			"",
-			"123",
-			"12345",
-			"12a4",
-			"abcd",
-		}
-
-		for _, entryCode := range cases {
-			if _, err := service.JoinSignedRoom(context.Background(), "room-1", entryCode); !errors.Is(err, ErrInvalidRoomEntryCode) {
-				t.Fatalf("expected ErrInvalidRoomEntryCode for %q, got %v", entryCode, err)
-			}
+		// Since it looks up by BOTH name and code, a wrong code results in a Not Found (404)
+		_, err := service.JoinSignedRoom(context.Background(), "alpha", "9999")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 }

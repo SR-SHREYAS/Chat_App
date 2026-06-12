@@ -12,6 +12,7 @@ import (
 
 	"real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
+	"real_time_chat_app/internal/model"
 	"real_time_chat_app/internal/util"
 
 	"github.com/gorilla/websocket"
@@ -74,10 +75,11 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var signedRoom model.SignedRoom
 	hasSignedRoom := false
 	var err error
 	if roomID != "" {
-		_, hasSignedRoom, err = h.chatService.HandleGetSignedRoomStatus(r.Context(), roomID)
+		signedRoom, hasSignedRoom, err = h.chatService.HandleGetSignedRoomStatus(r.Context(), roomID)
 	}
 	if err != nil {
 		switch {
@@ -135,27 +137,14 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if _, err := h.chatService.JoinSignedRoom(r.Context(), roomID, entryCode); err != nil {
-			switch {
-			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
-				h.recordSignedRoomJoinFailure(joinScope)
-				if h.isSignedRoomJoinBlocked(joinScope) {
-					closeWithPolicyViolation(socket, "too many failed entry code attempts")
-					return
-				}
-				closeWithPolicyViolation(socket, "invalid entry code")
-				return
-			case errors.Is(err, chat.ErrSignedRoomExpired):
-				closeWithPolicyViolation(socket, "room expired")
-				return
-			case errors.Is(err, chat.ErrSignedRoomNotFound):
-				closeWithPolicyViolation(socket, "room not found")
-				return
-			default:
-				log.Printf("Could not validate signed room entry for room %s: %v", roomID, err)
-				closeWithPolicyViolation(socket, "room access denied")
+		if entryCode != signedRoom.EntryCode {
+			h.recordSignedRoomJoinFailure(joinScope)
+			if h.isSignedRoomJoinBlocked(joinScope) {
+				closeWithPolicyViolation(socket, "too many failed entry code attempts")
 				return
 			}
+			closeWithPolicyViolation(socket, "invalid entry code")
+			return
 		}
 		if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomID, authUser.ID); err != nil {
 			log.Printf("Could not record signed room join for user=%s room=%s: %v", authUser.ID, roomID, err)
