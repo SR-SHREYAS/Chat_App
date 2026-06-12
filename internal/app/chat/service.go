@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/util"
 
 	"github.com/gorilla/websocket"
 	"github.com/lib/pq"
@@ -57,6 +59,7 @@ type MessageStore interface {
 type SignedRoomStore interface {
 	CreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	GetSignedRoomByID(ctx context.Context, roomID string) (model.SignedRoom, error)
+	GetSignedRoomByNameAndCode(ctx context.Context, roomName string, entryCode string) (model.SignedRoom, error)
 	UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error)
 	DeleteSignedRoomByID(ctx context.Context, roomID string) error
@@ -196,21 +199,25 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 	return room, nil
 }
 
-func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomID, entryCode string) (model.SignedRoom, error) {
-	room, found, err := s.HandleGetSignedRoomStatus(ctx, roomID)
-	if err != nil {
-		return model.SignedRoom{}, err
-	}
-	if !found {
-		return model.SignedRoom{}, ErrSignedRoomNotFound
+func (s *Service) JoinSignedRoom(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+	roomName = strings.TrimSpace(roomName)
+	if roomName == "" {
+		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid room name", nil)
 	}
 
-	normalizedCode, err := normalizeRoomEntryCode(entryCode)
+	room, err := s.roomStore.GetSignedRoomByNameAndCode(ctx, roomName, entryCode)
 	if err != nil {
-		return model.SignedRoom{}, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.SignedRoom{}, util.NewAppError(http.StatusNotFound, "invalid room name or entry code", nil)
+		}
+		return model.SignedRoom{}, util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
-	if room.EntryCode != normalizedCode {
-		return model.SignedRoom{}, ErrInvalidRoomEntryCode
+
+	now := time.Now().UTC()
+	if !room.ExpiresAt.After(now) {
+		_ = s.roomStore.DeleteSignedRoomByID(ctx, room.ID)
+		s.deleteRoomMessagesBestEffort(ctx, room.ID)
+		return model.SignedRoom{}, util.NewAppError(http.StatusGone, "signed room expired", nil)
 	}
 
 	return room, nil
@@ -457,19 +464,6 @@ func normalizeSignedRoomTTL(ttl time.Duration) (time.Duration, error) {
 		return 0, ErrSignedRoomTTLTooLarge
 	}
 	return ttl, nil
-}
-
-func normalizeRoomEntryCode(entryCode string) (string, error) {
-	code := strings.TrimSpace(entryCode)
-	if len(code) != SignedRoomCodeLength {
-		return "", ErrInvalidRoomEntryCode
-	}
-	for _, ch := range code {
-		if ch < '0' || ch > '9' {
-			return "", ErrInvalidRoomEntryCode
-		}
-	}
-	return code, nil
 }
 
 func generateRoomEntryCode() (string, error) {

@@ -135,7 +135,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if _, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomID, entryCode); err != nil {
+		if _, err := h.chatService.JoinSignedRoom(r.Context(), roomID, entryCode); err != nil {
 			switch {
 			case errors.Is(err, chat.ErrInvalidRoomEntryCode):
 				h.recordSignedRoomJoinFailure(joinScope)

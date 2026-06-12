@@ -68,6 +68,18 @@ func (s *fakeSignedRoomStore) GetSignedRoomByID(_ context.Context, roomID string
 	return model.SignedRoom{}, sql.ErrNoRows
 }
 
+func (s *fakeSignedRoomStore) GetSignedRoomByNameAndCode(_ context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, room := range s.rooms {
+		if room.RoomName == roomName && room.EntryCode == entryCode {
+			return room, nil
+		}
+	}
+	return model.SignedRoom{}, sql.ErrNoRows
+}
+
 func (s *fakeSignedRoomStore) UpdateSignedRoomExpiry(_ context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -397,7 +409,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		room, err := service.HandleJoinSignedRoom(context.Background(), "room-1", "1234")
+		room, err := service.JoinSignedRoom(context.Background(), "room-1", "1234")
 		if err != nil {
 			t.Fatalf("join signed room: %v", err)
 		}
@@ -410,7 +422,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "missing", "1234"); !errors.Is(err, ErrSignedRoomNotFound) {
+		if _, err := service.JoinSignedRoom(context.Background(), "missing", "1234"); !errors.Is(err, ErrSignedRoomNotFound) {
 			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
 		}
 	})
@@ -428,7 +440,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "room-exp", "1234"); !errors.Is(err, ErrSignedRoomExpired) {
+		if _, err := service.JoinSignedRoom(context.Background(), "room-exp", "1234"); !errors.Is(err, ErrSignedRoomExpired) {
 			t.Fatalf("expected ErrSignedRoomExpired, got %v", err)
 		}
 	})
@@ -446,7 +458,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "room-1", "9999"); !errors.Is(err, ErrInvalidRoomEntryCode) {
+		if _, err := service.JoinSignedRoom(context.Background(), "room-1", "9999"); !errors.Is(err, ErrInvalidRoomEntryCode) {
 			t.Fatalf("expected ErrInvalidRoomEntryCode, got %v", err)
 		}
 	})
@@ -473,7 +485,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		}
 
 		for _, entryCode := range cases {
-			if _, err := service.HandleJoinSignedRoom(context.Background(), "room-1", entryCode); !errors.Is(err, ErrInvalidRoomEntryCode) {
+			if _, err := service.JoinSignedRoom(context.Background(), "room-1", entryCode); !errors.Is(err, ErrInvalidRoomEntryCode) {
 				t.Fatalf("expected ErrInvalidRoomEntryCode for %q, got %v", entryCode, err)
 			}
 		}
@@ -806,6 +818,10 @@ func (s *errorSignedRoomStore) CreateSignedRoom(context.Context, string, string,
 }
 
 func (s *errorSignedRoomStore) GetSignedRoomByID(context.Context, string) (model.SignedRoom, error) {
+	return model.SignedRoom{}, s.err
+}
+
+func (s *errorSignedRoomStore) GetSignedRoomByNameAndCode(context.Context, string, string) (model.SignedRoom, error) {
 	return model.SignedRoom{}, s.err
 }
 

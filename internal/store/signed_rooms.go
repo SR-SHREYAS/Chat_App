@@ -130,6 +130,22 @@ func (s *SignedRoomStore) GetSignedRoomByID(ctx context.Context, roomID string) 
 	return room, nil
 }
 
+func (s *SignedRoomStore) GetSignedRoomByNameAndCode(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+	var room model.SignedRoom
+	query := `
+		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
+		FROM signed_rooms sr
+		INNER JOIN users u ON u.id = sr.owner_user_id
+		WHERE sr.room_name = $1 AND sr.entry_code = $2
+	`
+	err := s.db.QueryRowContext(ctx, query, roomName, entryCode).
+		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUsername, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+	return room, nil
+}
+
 func (s *SignedRoomStore) UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	query := `
