@@ -121,9 +121,11 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 
 	messages, err := s.store.GetRecentMessages(queryCtx, c.room.name, 50)
 	if err != nil {
-		log.Printf("Could not query recent messages for room ID %s: %v", c.room.name, err)
+		log.Printf("[HISTORY ERROR] Could not query recent messages for room ID %s: %v", c.room.name, err)
 		return
 	}
+
+	log.Printf("[HISTORY DEBUG] Retrieved %d messages from DB for room %s", len(messages), c.room.name)
 
 	count := 0
 	for _, m := range messages {
@@ -132,14 +134,14 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 			"message": m.Message,
 		})
 		if err != nil {
-			log.Printf("Error marshaling message for user %s: %v", m.Username, err)
+			log.Printf("[HISTORY ERROR] Error marshaling message for user %s: %v", m.Username, err)
 			continue
 		}
 		c.receive <- msgJSON
 		count++
 	}
 
-	log.Printf("Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
+	log.Printf("[HISTORY DEBUG] Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
 }
 
 func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomID, userID, username string, persistMessages bool) (*Room, *Client) {
