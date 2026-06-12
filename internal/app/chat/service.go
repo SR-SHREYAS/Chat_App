@@ -411,6 +411,19 @@ func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomID string, own
 		return util.NewAppError(http.StatusInternalServerError, "failed to delete signed room", err)
 	}
 
+	// Actively kick out any connected clients (like guests) so they can't keep chatting
+	if room := s.rooms.GetOrCreate(roomID); room != nil {
+		msgJSON, _ := json.Marshal(map[string]string{
+			"type":    "error",
+			"code":    "room_deleted",
+			"message": "This room has been deleted by the owner.",
+		})
+		select {
+		case room.forward <- msgJSON:
+		default:
+		}
+	}
+
 	return nil
 }
 
@@ -442,6 +455,20 @@ func (s *Service) HandlePurgeSignedRoom(ctx context.Context, roomID string, owne
 	if err := s.roomStore.DeleteSignedRoomByID(ctx, roomID); err != nil {
 		return util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
+
+	// Actively kick out any connected clients
+	if room := s.rooms.GetOrCreate(roomID); room != nil {
+		msgJSON, _ := json.Marshal(map[string]string{
+			"type":    "error",
+			"code":    "room_deleted",
+			"message": "This room has been permanently deleted.",
+		})
+		select {
+		case room.forward <- msgJSON:
+		default:
+		}
+	}
+
 	// Best-effort: message deletion errors are logged inside deleteRoomMessagesBestEffort
 	// but do not change the purge outcome.
 	s.deleteRoomMessagesBestEffort(ctx, roomID)

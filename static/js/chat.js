@@ -271,6 +271,14 @@ function connect() {
     try {
       const data = JSON.parse(event.data);
 
+      if (data.type === "error" && data.code === "room_deleted") {
+        markRoomUnavailable("Room TTL: expired", data.message);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, "room deleted");
+        }
+        return;
+      }
+
       if (data.type === "error" && data.code === "message_too_long") {
         showStatus(`Message too long (max ${MAX_MESSAGE_LEN} characters).`);
         setTimeout(() => {
