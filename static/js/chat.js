@@ -271,6 +271,8 @@ function connect() {
     try {
       const data = JSON.parse(event.data);
 
+      console.log("WebSocket received data:", data);
+
       if (data.type === "error" && data.code === "room_deleted") {
         markRoomUnavailable("Room TTL: expired", data.message);
         if (socket && socket.readyState === WebSocket.OPEN) {
