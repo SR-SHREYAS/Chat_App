@@ -156,7 +156,7 @@ function renderRoomHistorySlide(index, rooms) {
       actions.appendChild(extendBtn);
     }
 
-    if (room.role === "owner") {
+    if (room.active && room.role === "owner") {
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "delete-room-btn";
       deleteBtn.type = "button";
@@ -440,8 +440,8 @@ async function joinSignedRoom() {
     }
 
     if (payload.chat_url) {
-      if (codeParsed.value) {
-        ChatEntryCode.persistEntryCodeForRoom(roomID, codeParsed.value);
+      if (codeParsed.value && payload.room_id) {
+        ChatEntryCode.persistEntryCodeForRoom(payload.room_id, codeParsed.value);
       }
       window.location.href = payload.chat_url;
       return;

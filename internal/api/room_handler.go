@@ -35,7 +35,7 @@ type joinSignedRoomRequest struct {
 }
 
 type signedRoomEnvelope struct {
-	RoomID           string `json:"-"`
+	RoomID           string `json:"room_id"`
 	RoomName         string `json:"room_name"`
 	OwnerUsername    string `json:"owner_username,omitempty"`
 	EntryCode        string `json:"entry_code,omitempty"`
