@@ -84,7 +84,7 @@ function loadRoomEntryCode() {
 
     // Backward compatibility: if nothing found, try legacy name-based key.
     if (!isValidEntryCode(code)) {
-      const legacyKey = params.get("room_name") || params.get("room") || "";
+      const legacyKey = params.get("room") || params.get("room_name") || "";
       if (legacyKey) {
         code = ChatEntryCode.loadEntryCodeForRoom(legacyKey);
       }

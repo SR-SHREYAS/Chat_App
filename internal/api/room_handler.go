@@ -35,7 +35,7 @@ type joinSignedRoomRequest struct {
 }
 
 type signedRoomEnvelope struct {
-	RoomID           string `json:"room_id"`
+	RoomID           string `json:"-"`
 	RoomName         string `json:"room_name"`
 	OwnerUsername    string `json:"owner_username,omitempty"`
 	EntryCode        string `json:"entry_code,omitempty"`
@@ -339,16 +339,42 @@ func (h *Handler) handleDeleteSignedRoom(w http.ResponseWriter, r *http.Request)
 	}
 
 	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	if roomID == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room_id is required"})
+		return
+	}
+
 	if err := h.chatService.HandleDeleteSignedRoom(r.Context(), roomID, authUser.ID); err != nil {
-		if errors.Is(err, chat.ErrRoomOwnedByAnotherUser) {
-			writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
-			return
-		}
 		h.writeSignedRoomError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"expired": true})
+}
+
+func (h *Handler) handlePurgeSignedRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authUser, ok := h.requireAuthenticatedUser(w, r)
+	if !ok {
+		return
+	}
+
+	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	if roomID == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room_id is required"})
+		return
+	}
+
+	if err := h.chatService.HandlePurgeSignedRoom(r.Context(), roomID, authUser.ID); err != nil {
+		h.writeSignedRoomError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"purged": true})
 }
 
 func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +415,16 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
+	var appErr *util.AppError
+	if errors.As(err, &appErr) {
+		// Log a sanitized, structured view of the internal error to avoid leaking sensitive data.
+		if appErr.Internal != nil {
+			log.Printf("[ERROR] signed room error: type=%T message=%q", appErr.Internal, appErr.Message)
+		}
+		writeJSON(w, appErr.StatusCode, errorEnvelope{Error: appErr.Message})
+		return
+	}
+
 	switch {
 	case errors.Is(err, chat.ErrSignedRoomUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
@@ -473,7 +509,6 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 	if includeChatURL {
 		query := url.Values{}
 		query.Set("room_id", room.ID)
-		query.Set("room_name", room.RoomName)
 		query.Set("expires_at", room.ExpiresAt.UTC().Format(time.RFC3339))
 		out.ChatURL = "/chat?" + query.Encode()
 	}

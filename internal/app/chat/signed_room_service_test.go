@@ -140,6 +140,32 @@ func (s *fakeSignedRoomStore) DeleteSignedRoomByID(_ context.Context, roomID str
 	return nil
 }
 
+func (s *fakeSignedRoomStore) ExpireSignedRoom(_ context.Context, roomID string, ownerUserID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	room, ok := s.rooms[roomID]
+	if !ok {
+		for key, candidate := range s.rooms {
+			if candidate.ID == roomID {
+				room = candidate
+				roomID = key
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return sql.ErrNoRows
+		}
+	}
+	if room.OwnerUserID != ownerUserID || !room.ExpiresAt.After(time.Now().UTC()) {
+		return sql.ErrNoRows
+	}
+	room.ExpiresAt = time.Now().UTC()
+	s.rooms[roomID] = room
+	return nil
+}
+
 func (s *fakeSignedRoomStore) DeleteExpiredSignedRooms(_ context.Context, now time.Time) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -815,6 +841,10 @@ func (s *errorSignedRoomStore) ListOwnedSignedRooms(context.Context, string) ([]
 }
 
 func (s *errorSignedRoomStore) DeleteSignedRoomByID(context.Context, string) error {
+	return s.err
+}
+
+func (s *errorSignedRoomStore) ExpireSignedRoom(context.Context, string, string) error {
 	return s.err
 }
 

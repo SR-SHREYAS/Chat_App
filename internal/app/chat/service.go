@@ -2,6 +2,9 @@ package chat
 
 import (
 	"context"
+	"net/http"
+	"strings"
+
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -9,8 +12,6 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,7 @@ type SignedRoomStore interface {
 	UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error)
 	DeleteSignedRoomByID(ctx context.Context, roomID string) error
+	ExpireSignedRoom(ctx context.Context, roomID string, ownerUserID string) error
 	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error)
 	RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error
 	GetRoomMembership(ctx context.Context, userID string, roomID string) (model.RoomHistory, error)
@@ -215,8 +217,6 @@ func (s *Service) JoinSignedRoom(ctx context.Context, roomName, entryCode string
 
 	now := time.Now().UTC()
 	if !room.ExpiresAt.After(now) {
-		_ = s.roomStore.DeleteSignedRoomByID(ctx, room.ID)
-		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, util.NewAppError(http.StatusGone, "signed room expired", nil)
 	}
 
@@ -385,34 +385,63 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 	return room, nil
 }
 
+// HandleDeleteSignedRoom performs a "soft delete" by expiring the room,
+// putting it into a 7-day grace period where it can be revived or purged.
 func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
 	if s.roomStore == nil {
-		return ErrSignedRoomUnavailable
+		return util.NewAppError(http.StatusServiceUnavailable, ErrSignedRoomUnavailable.Error(), nil)
 	}
 
 	roomID = strings.TrimSpace(roomID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+
 	if roomID == "" {
-		return ErrInvalidRoomName
+		return util.NewAppError(http.StatusBadRequest, ErrInvalidRoomName.Error(), nil)
 	}
 	if ownerUserID == "" {
-		return ErrInvalidRoomOwner
+		return util.NewAppError(http.StatusBadRequest, "owner user id is required", nil)
 	}
 
+	err := s.roomStore.ExpireSignedRoom(ctx, roomID, ownerUserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return util.NewAppError(http.StatusNotFound, "signed room not found or already expired", nil)
+		}
+		return util.NewAppError(http.StatusInternalServerError, "failed to delete signed room", err)
+	}
+
+	return nil
+}
+
+// HandlePurgeSignedRoom performs a "hard delete", permanently removing the room
+// and all its associated data from the database.
+func (s *Service) HandlePurgeSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
+	roomID = strings.TrimSpace(roomID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+
+	if roomID == "" {
+		return util.NewAppError(http.StatusBadRequest, "room_id is required", nil)
+	}
+	if ownerUserID == "" {
+		return util.NewAppError(http.StatusBadRequest, "owner user id is required", nil)
+	}
+	if s.roomStore == nil {
+		return util.NewAppError(http.StatusServiceUnavailable, ErrSignedRoomUnavailable.Error(), nil)
+	}
 	room, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrSignedRoomNotFound
+			return util.NewAppError(http.StatusNotFound, ErrSignedRoomNotFound.Error(), err)
 		}
-		return err
+		return util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
-
 	if room.OwnerUserID != ownerUserID {
-		return ErrRoomOwnedByAnotherUser
+		return util.NewAppError(http.StatusForbidden, ErrRoomOwnedByAnotherUser.Error(), nil)
 	}
-
 	if err := s.roomStore.DeleteSignedRoomByID(ctx, roomID); err != nil {
-		return err
+		return util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
+	s.deleteRoomMessagesBestEffort(ctx, roomID)
 	return nil
 }
 

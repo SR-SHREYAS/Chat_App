@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"real_time_chat_app/internal/app/auth"
@@ -208,10 +210,19 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("OK"))
 }
 
+var (
+	guestFallbackCounter uint64
+)
+
 func randomGuestID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		return "guest"
+		log.Printf("crypto/rand.Read failed when generating guest ID: %v", err)
+
+		// Fallback: time-based ID + counter to reduce likelihood of collisions
+		ts := time.Now().UTC().Format("20060102150405.000000000")
+		c := atomic.AddUint64(&guestFallbackCounter, 1)
+		return fmt.Sprintf("guest-%s-%d", ts, c)
 	}
 	return hex.EncodeToString(b)
 }

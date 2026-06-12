@@ -196,6 +196,34 @@ function renderRoomHistorySlide(index, rooms) {
         }
       });
       actions.appendChild(reviveBtn);
+
+      const purgeBtn = document.createElement("button");
+      purgeBtn.className = "delete-room-btn";
+      purgeBtn.type = "button";
+      purgeBtn.textContent = "Permanently Delete";
+      purgeBtn.addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) {
+          return;
+        }
+
+        const confirmed = confirm(`Permanently delete the room "${room.room_name}" and all its contents?\n\nThis cannot be undone.`);
+        if (!confirmed) {
+          return;
+        }
+
+        button.disabled = true;
+        try {
+          const ok = await purgeSignedRoom(room.room_id, room.room_name);
+          if (ok) {
+            return;
+          }
+        } catch (_err) {
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.appendChild(purgeBtn);
     }
 
     row.append(name, meta, actions);
@@ -449,6 +477,34 @@ async function deleteSignedRoom(roomID, roomName) {
     const msg = err instanceof Error ? err.message : String(err || "Could not delete room");
     setMessage(msg || "Could not delete room", true);
     throw err;
+  }
+}
+
+async function purgeSignedRoom(roomID, roomName) {
+  if (!roomID) {
+    return false;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch(`/api/rooms/purge?room_id=${encodeURIComponent(roomID)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not permanently delete room");
+    }
+
+    await loadRoomHistory();
+    setMessage(`Permanently deleted room "${roomName}".`);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err || "Could not permanently delete room");
+    setMessage(msg || "Could not permanently delete room", true);
+    return false;
   }
 }
 

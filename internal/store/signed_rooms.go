@@ -196,6 +196,26 @@ func (s *SignedRoomStore) DeleteSignedRoomByID(ctx context.Context, roomID strin
 	return err
 }
 
+func (s *SignedRoomStore) ExpireSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
+	query := `
+		UPDATE signed_rooms
+		SET expires_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND owner_user_id = $2 AND expires_at > NOW()
+	`
+	res, err := s.db.ExecContext(ctx, query, roomID, ownerUserID)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
 	const batchSize = 1000
 
