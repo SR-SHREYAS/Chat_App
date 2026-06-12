@@ -473,6 +473,7 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 	if includeChatURL {
 		query := url.Values{}
 		query.Set("room_id", room.ID)
+		query.Set("room_name", room.RoomName)
 		query.Set("expires_at", room.ExpiresAt.UTC().Format(time.RFC3339))
 		out.ChatURL = "/chat?" + query.Encode()
 	}

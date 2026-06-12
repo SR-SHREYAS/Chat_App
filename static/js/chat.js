@@ -84,7 +84,7 @@ function loadRoomEntryCode() {
 
     // Backward compatibility: if nothing found, try legacy name-based key.
     if (!isValidEntryCode(code)) {
-      const legacyKey = params.get("room") || "";
+      const legacyKey = params.get("room_name") || params.get("room") || "";
       if (legacyKey) {
         code = ChatEntryCode.loadEntryCodeForRoom(legacyKey);
       }
@@ -197,6 +197,9 @@ async function loadRoomConfig() {
 
 async function resolveRoomExpiryFromAPI() {
   if (roomMode.type !== "signed" || roomExpiryTime) {
+    if (roomMode.type === "signed" && !isValidEntryCode(roomCode)) {
+      markRoomUnavailable("Room TTL: restricted", "Entry code required to access this room.");
+    }
     return;
   }
 

@@ -265,5 +265,7 @@ func closeWithPolicyViolation(socket *websocket.Conn, reason string) {
 		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
 		time.Now().Add(time.Second),
 	)
+	// Give the client a brief moment to read the close frame before severing TCP
+	time.Sleep(100 * time.Millisecond)
 	_ = socket.Close()
 }
