@@ -84,7 +84,7 @@ function loadRoomEntryCode() {
 
     // Backward compatibility: if nothing found, try legacy name-based key.
     if (!isValidEntryCode(code)) {
-      const legacyKey = params.get("room") || "";
+      const legacyKey = params.get("room") || params.get("room_name") || "";
       if (legacyKey) {
         code = ChatEntryCode.loadEntryCodeForRoom(legacyKey);
       }
@@ -197,6 +197,9 @@ async function loadRoomConfig() {
 
 async function resolveRoomExpiryFromAPI() {
   if (roomMode.type !== "signed" || roomExpiryTime) {
+    if (roomMode.type === "signed" && !isValidEntryCode(roomCode)) {
+      markRoomUnavailable("Room TTL: restricted", "Entry code required to access this room.");
+    }
     return;
   }
 
@@ -267,6 +270,16 @@ function connect() {
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+
+      console.log("WebSocket received data:", data);
+
+      if (data.type === "error" && data.code === "room_deleted") {
+        markRoomUnavailable("Room TTL: expired", data.message);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, "room deleted");
+        }
+        return;
+      }
 
       if (data.type === "error" && data.code === "message_too_long") {
         showStatus(`Message too long (max ${MAX_MESSAGE_LEN} characters).`);

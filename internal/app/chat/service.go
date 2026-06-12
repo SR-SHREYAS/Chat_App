@@ -2,6 +2,9 @@ package chat
 
 import (
 	"context"
+	"net/http"
+	"strings"
+
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -9,11 +12,11 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"strings"
 	"sync"
 	"time"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/util"
 
 	"github.com/gorilla/websocket"
 	"github.com/lib/pq"
@@ -57,9 +60,11 @@ type MessageStore interface {
 type SignedRoomStore interface {
 	CreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	GetSignedRoomByID(ctx context.Context, roomID string) (model.SignedRoom, error)
+	GetSignedRoomByNameAndCode(ctx context.Context, roomName string, entryCode string) (model.SignedRoom, error)
 	UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error)
 	DeleteSignedRoomByID(ctx context.Context, roomID string) error
+	ExpireSignedRoom(ctx context.Context, roomID string, ownerUserID string) error
 	DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error)
 	RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error
 	GetRoomMembership(ctx context.Context, userID string, roomID string) (model.RoomHistory, error)
@@ -116,9 +121,11 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 
 	messages, err := s.store.GetRecentMessages(queryCtx, c.room.name, 50)
 	if err != nil {
-		log.Printf("Could not query recent messages for room ID %s: %v", c.room.name, err)
+		log.Printf("[HISTORY ERROR] Could not query recent messages for room ID %s: %v", c.room.name, err)
 		return
 	}
+
+	log.Printf("[HISTORY DEBUG] Retrieved %d messages from DB for room %s", len(messages), c.room.name)
 
 	count := 0
 	for _, m := range messages {
@@ -127,14 +134,14 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 			"message": m.Message,
 		})
 		if err != nil {
-			log.Printf("Error marshaling message for user %s: %v", m.Username, err)
+			log.Printf("[HISTORY ERROR] Error marshaling message for user %s: %v", m.Username, err)
 			continue
 		}
 		c.receive <- msgJSON
 		count++
 	}
 
-	log.Printf("Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
+	log.Printf("[HISTORY DEBUG] Sent %d recent messages to %s in room %s", count, c.name, c.room.name)
 }
 
 func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomID, userID, username string, persistMessages bool) (*Room, *Client) {
@@ -196,21 +203,28 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 	return room, nil
 }
 
-func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomID, entryCode string) (model.SignedRoom, error) {
-	room, found, err := s.HandleGetSignedRoomStatus(ctx, roomID)
-	if err != nil {
-		return model.SignedRoom{}, err
-	}
-	if !found {
-		return model.SignedRoom{}, ErrSignedRoomNotFound
+func (s *Service) JoinSignedRoom(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+	roomName = strings.TrimSpace(roomName)
+	if roomName == "" {
+		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid room name", nil)
 	}
 
-	normalizedCode, err := normalizeRoomEntryCode(entryCode)
-	if err != nil {
-		return model.SignedRoom{}, err
+	entryCode = strings.TrimSpace(entryCode)
+	if entryCode == "" || !isValidRoomEntryCode(entryCode) {
+		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid entry code format", nil)
 	}
-	if room.EntryCode != normalizedCode {
-		return model.SignedRoom{}, ErrInvalidRoomEntryCode
+
+	room, err := s.roomStore.GetSignedRoomByNameAndCode(ctx, roomName, entryCode)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.SignedRoom{}, util.NewAppError(http.StatusNotFound, "invalid room name or entry code", nil)
+		}
+		return model.SignedRoom{}, util.NewAppError(http.StatusInternalServerError, "database error", err)
+	}
+
+	now := time.Now().UTC()
+	if !room.ExpiresAt.After(now) {
+		return model.SignedRoom{}, util.NewAppError(http.StatusGone, "signed room expired", nil)
 	}
 
 	return room, nil
@@ -261,10 +275,6 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, own
 		return model.SignedRoom{}, ErrRoomOwnedByAnotherUser
 	}
 	if !room.ExpiresAt.After(now) {
-		if err := s.roomStore.DeleteSignedRoomByID(ctx, room.ID); err != nil {
-			log.Printf("Best-effort signed room delete failed for expired room %s: %v", room.ID, err)
-		}
-		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, ErrSignedRoomExpired
 	}
 	if err := s.maybeDeleteExpiredSignedRooms(ctx, now); err != nil {
@@ -378,34 +388,92 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 	return room, nil
 }
 
+// HandleDeleteSignedRoom performs a "soft delete" by expiring the room,
+// putting it into a 7-day grace period where it can be revived or purged.
 func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
 	if s.roomStore == nil {
-		return ErrSignedRoomUnavailable
+		return util.NewAppError(http.StatusServiceUnavailable, ErrSignedRoomUnavailable.Error(), nil)
 	}
 
 	roomID = strings.TrimSpace(roomID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+
 	if roomID == "" {
-		return ErrInvalidRoomName
+		return util.NewAppError(http.StatusBadRequest, ErrInvalidRoomName.Error(), nil)
 	}
 	if ownerUserID == "" {
-		return ErrInvalidRoomOwner
+		return util.NewAppError(http.StatusBadRequest, "owner user id is required", nil)
 	}
 
+	err := s.roomStore.ExpireSignedRoom(ctx, roomID, ownerUserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return util.NewAppError(http.StatusNotFound, "signed room not found or already expired", nil)
+		}
+		return util.NewAppError(http.StatusInternalServerError, "failed to delete signed room", err)
+	}
+
+	// Actively kick out any connected clients (like guests) so they can't keep chatting
+	if room := s.rooms.GetOrCreate(roomID); room != nil {
+		msgJSON, _ := json.Marshal(map[string]string{
+			"type":    "error",
+			"code":    "room_deleted",
+			"message": "This room has been deleted by the owner.",
+		})
+		select {
+		case room.forward <- msgJSON:
+		default:
+		}
+	}
+
+	return nil
+}
+
+// HandlePurgeSignedRoom performs a "hard delete", permanently removing the room
+// and all its associated data from the database.
+func (s *Service) HandlePurgeSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
+	roomID = strings.TrimSpace(roomID)
+	ownerUserID = strings.TrimSpace(ownerUserID)
+
+	if roomID == "" {
+		return util.NewAppError(http.StatusBadRequest, "room_id is required", nil)
+	}
+	if ownerUserID == "" {
+		return util.NewAppError(http.StatusBadRequest, "owner user id is required", nil)
+	}
+	if s.roomStore == nil {
+		return util.NewAppError(http.StatusServiceUnavailable, ErrSignedRoomUnavailable.Error(), nil)
+	}
 	room, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrSignedRoomNotFound
+			return util.NewAppError(http.StatusNotFound, ErrSignedRoomNotFound.Error(), err)
 		}
-		return err
+		return util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
-
 	if room.OwnerUserID != ownerUserID {
-		return ErrRoomOwnedByAnotherUser
+		return util.NewAppError(http.StatusForbidden, ErrRoomOwnedByAnotherUser.Error(), nil)
+	}
+	if err := s.roomStore.DeleteSignedRoomByID(ctx, roomID); err != nil {
+		return util.NewAppError(http.StatusInternalServerError, "database error", err)
 	}
 
-	if err := s.roomStore.DeleteSignedRoomByID(ctx, roomID); err != nil {
-		return err
+	// Actively kick out any connected clients
+	if room := s.rooms.GetOrCreate(roomID); room != nil {
+		msgJSON, _ := json.Marshal(map[string]string{
+			"type":    "error",
+			"code":    "room_deleted",
+			"message": "This room has been permanently deleted.",
+		})
+		select {
+		case room.forward <- msgJSON:
+		default:
+		}
 	}
+
+	// Best-effort: message deletion errors are logged inside deleteRoomMessagesBestEffort
+	// but do not change the purge outcome.
+	s.deleteRoomMessagesBestEffort(ctx, roomID)
 	return nil
 }
 
@@ -439,10 +507,6 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomID string) 
 
 	now := time.Now().UTC()
 	if !room.ExpiresAt.After(now) {
-		if err := s.roomStore.DeleteSignedRoomByID(ctx, room.ID); err != nil {
-			log.Printf("Best-effort signed room delete failed for expired room %s: %v", room.ID, err)
-		}
-		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, false, ErrSignedRoomExpired
 	}
 
@@ -459,17 +523,16 @@ func normalizeSignedRoomTTL(ttl time.Duration) (time.Duration, error) {
 	return ttl, nil
 }
 
-func normalizeRoomEntryCode(entryCode string) (string, error) {
-	code := strings.TrimSpace(entryCode)
+func isValidRoomEntryCode(code string) bool {
 	if len(code) != SignedRoomCodeLength {
-		return "", ErrInvalidRoomEntryCode
+		return false
 	}
-	for _, ch := range code {
-		if ch < '0' || ch > '9' {
-			return "", ErrInvalidRoomEntryCode
+	for i := 0; i < len(code); i++ {
+		if code[i] < '0' || code[i] > '9' {
+			return false
 		}
 	}
-	return code, nil
+	return true
 }
 
 func generateRoomEntryCode() (string, error) {
@@ -489,8 +552,12 @@ func isUniqueConstraintViolation(err error) bool {
 }
 
 func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Time) error {
+	// 7-Day Grace Period: Only physically delete rooms that have been expired for over 7 days.
+	// This gives owners a window to "Revive" them with their message history intact!
+	gracePeriodCutoff := now.Add(-7 * 24 * time.Hour)
+
 	if s.signedRoomCleanupEvery <= 0 {
-		expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+		expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
 		if err != nil {
 			return err
 		}
@@ -509,7 +576,7 @@ func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Ti
 		return nil
 	}
 
-	expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+	expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
 	if err != nil {
 		s.cleanupMu.Lock()
 		s.lastSignedRoomCleanup = time.Time{}

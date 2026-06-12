@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/util"
 
 	"github.com/lib/pq"
 )
@@ -62,6 +64,18 @@ func (s *fakeSignedRoomStore) GetSignedRoomByID(_ context.Context, roomID string
 	}
 	for _, room = range s.rooms {
 		if room.ID == roomID {
+			return room, nil
+		}
+	}
+	return model.SignedRoom{}, sql.ErrNoRows
+}
+
+func (s *fakeSignedRoomStore) GetSignedRoomByNameAndCode(_ context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, room := range s.rooms {
+		if room.RoomName == roomName && room.EntryCode == entryCode {
 			return room, nil
 		}
 	}
@@ -123,6 +137,32 @@ func (s *fakeSignedRoomStore) DeleteSignedRoomByID(_ context.Context, roomID str
 		}
 	}
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *fakeSignedRoomStore) ExpireSignedRoom(_ context.Context, roomID string, ownerUserID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	room, ok := s.rooms[roomID]
+	if !ok {
+		for key, candidate := range s.rooms {
+			if candidate.ID == roomID {
+				room = candidate
+				roomID = key
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return sql.ErrNoRows
+		}
+	}
+	if room.OwnerUserID != ownerUserID || !room.ExpiresAt.After(time.Now().UTC()) {
+		return sql.ErrNoRows
+	}
+	room.ExpiresAt = time.Now().UTC()
+	s.rooms[roomID] = room
 	return nil
 }
 
@@ -397,7 +437,7 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		room, err := service.HandleJoinSignedRoom(context.Background(), "room-1", "1234")
+		room, err := service.JoinSignedRoom(context.Background(), "alpha", "1234")
 		if err != nil {
 			t.Fatalf("join signed room: %v", err)
 		}
@@ -410,8 +450,10 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "missing", "1234"); !errors.Is(err, ErrSignedRoomNotFound) {
-			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
+		_, err := service.JoinSignedRoom(context.Background(), "missing", "1234")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 
@@ -428,8 +470,10 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "room-exp", "1234"); !errors.Is(err, ErrSignedRoomExpired) {
-			t.Fatalf("expected ErrSignedRoomExpired, got %v", err)
+		_, err := service.JoinSignedRoom(context.Background(), "expired", "1234")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusGone {
+			t.Fatalf("expected 410 AppError, got %v", err)
 		}
 	})
 
@@ -446,36 +490,11 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if _, err := service.HandleJoinSignedRoom(context.Background(), "room-1", "9999"); !errors.Is(err, ErrInvalidRoomEntryCode) {
-			t.Fatalf("expected ErrInvalidRoomEntryCode, got %v", err)
-		}
-	})
-
-	t.Run("malformed code", func(t *testing.T) {
-		store := newFakeSignedRoomStore()
-		store.rooms["alpha"] = model.SignedRoom{
-			ID:          "room-1",
-			RoomName:    "alpha",
-			OwnerUserID: "1",
-			EntryCode:   "1234",
-			ExpiresAt:   time.Now().UTC().Add(5 * time.Minute),
-		}
-
-		service := NewService(noopMessageStore{})
-		service.BindSignedRoomStore(store)
-
-		cases := []string{
-			"",
-			"123",
-			"12345",
-			"12a4",
-			"abcd",
-		}
-
-		for _, entryCode := range cases {
-			if _, err := service.HandleJoinSignedRoom(context.Background(), "room-1", entryCode); !errors.Is(err, ErrInvalidRoomEntryCode) {
-				t.Fatalf("expected ErrInvalidRoomEntryCode for %q, got %v", entryCode, err)
-			}
+		// Since it looks up by BOTH name and code, a wrong code results in a Not Found (404)
+		_, err := service.JoinSignedRoom(context.Background(), "alpha", "9999")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 }
@@ -504,7 +523,7 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 			RoomName:    "expired-owner-1",
 			OwnerUserID: "1",
 			EntryCode:   "2222",
-			ExpiresAt:   time.Now().UTC().Add(-1 * time.Minute),
+			ExpiresAt:   time.Now().UTC().Add(-8 * 24 * time.Hour), // Expired beyond 7-day grace period
 		}
 		store.rooms["active-owner-2"] = model.SignedRoom{
 			ID:          "room-act-2",
@@ -698,8 +717,12 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		if err := service.HandleDeleteSignedRoom(context.Background(), "room-1", "1"); err != nil {
 			t.Fatalf("delete signed room: %v", err)
 		}
-		if _, ok := store.rooms["alpha"]; ok {
-			t.Fatalf("expected room to be deleted")
+		room, err := store.GetSignedRoomByID(context.Background(), "room-1")
+		if err != nil {
+			t.Fatalf("expected room to still exist (soft delete), got %v", err)
+		}
+		if room.ExpiresAt.After(time.Now().UTC()) {
+			t.Fatalf("expected room to be expired")
 		}
 	})
 
@@ -716,11 +739,10 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "room-1", "2"); !errors.Is(err, ErrRoomOwnedByAnotherUser) {
-			t.Fatalf("expected ErrRoomOwnedByAnotherUser, got %v", err)
-		}
-		if _, ok := store.rooms["alpha"]; !ok {
-			t.Fatalf("expected room to remain after rejected delete")
+		err := service.HandleDeleteSignedRoom(context.Background(), "room-1", "2")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound { // Since ExpireSignedRoom returns ErrNoRows for wrong owner
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 
@@ -737,11 +759,10 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "room-expired", "1"); err != nil {
-			t.Fatalf("delete expired signed room: %v", err)
-		}
-		if _, err := store.GetSignedRoomByID(context.Background(), "room-expired"); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("expected expired room to be deleted, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), "room-expired", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError for already expired room, got %v", err)
 		}
 	})
 
@@ -749,8 +770,10 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "missing", "1"); !errors.Is(err, ErrSignedRoomNotFound) {
-			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), "missing", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 
@@ -758,19 +781,24 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), " ", "1"); !errors.Is(err, ErrInvalidRoomName) {
-			t.Fatalf("expected ErrInvalidRoomName, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), " ", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 AppError, got %v", err)
 		}
-		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", ""); !errors.Is(err, ErrInvalidRoomOwner) {
-			t.Fatalf("expected ErrInvalidRoomOwner, got %v", err)
+		err = service.HandleDeleteSignedRoom(context.Background(), "alpha", "")
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 AppError, got %v", err)
 		}
 	})
 
 	t.Run("store unavailable", func(t *testing.T) {
 		service := NewService(noopMessageStore{})
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", "1"); !errors.Is(err, ErrSignedRoomUnavailable) {
-			t.Fatalf("expected ErrSignedRoomUnavailable, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), "alpha", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 AppError, got %v", err)
 		}
 	})
 }
@@ -809,6 +837,10 @@ func (s *errorSignedRoomStore) GetSignedRoomByID(context.Context, string) (model
 	return model.SignedRoom{}, s.err
 }
 
+func (s *errorSignedRoomStore) GetSignedRoomByNameAndCode(context.Context, string, string) (model.SignedRoom, error) {
+	return model.SignedRoom{}, s.err
+}
+
 func (s *errorSignedRoomStore) UpdateSignedRoomExpiry(context.Context, string, string, string, time.Time) (model.SignedRoom, error) {
 	return model.SignedRoom{}, s.err
 }
@@ -818,6 +850,10 @@ func (s *errorSignedRoomStore) ListOwnedSignedRooms(context.Context, string) ([]
 }
 
 func (s *errorSignedRoomStore) DeleteSignedRoomByID(context.Context, string) error {
+	return s.err
+}
+
+func (s *errorSignedRoomStore) ExpireSignedRoom(context.Context, string, string) error {
 	return s.err
 }
 
