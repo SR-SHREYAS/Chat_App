@@ -273,10 +273,6 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, own
 		return model.SignedRoom{}, ErrRoomOwnedByAnotherUser
 	}
 	if !room.ExpiresAt.After(now) {
-		if err := s.roomStore.DeleteSignedRoomByID(ctx, room.ID); err != nil {
-			log.Printf("Best-effort signed room delete failed for expired room %s: %v", room.ID, err)
-		}
-		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, ErrSignedRoomExpired
 	}
 	if err := s.maybeDeleteExpiredSignedRooms(ctx, now); err != nil {
@@ -482,10 +478,6 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomID string) 
 
 	now := time.Now().UTC()
 	if !room.ExpiresAt.After(now) {
-		if err := s.roomStore.DeleteSignedRoomByID(ctx, room.ID); err != nil {
-			log.Printf("Best-effort signed room delete failed for expired room %s: %v", room.ID, err)
-		}
-		s.deleteRoomMessagesBestEffort(ctx, room.ID)
 		return model.SignedRoom{}, false, ErrSignedRoomExpired
 	}
 
@@ -531,8 +523,12 @@ func isUniqueConstraintViolation(err error) bool {
 }
 
 func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Time) error {
+	// 7-Day Grace Period: Only physically delete rooms that have been expired for over 7 days.
+	// This gives owners a window to "Revive" them with their message history intact!
+	gracePeriodCutoff := now.Add(-7 * 24 * time.Hour)
+
 	if s.signedRoomCleanupEvery <= 0 {
-		expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+		expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
 		if err != nil {
 			return err
 		}
@@ -551,7 +547,7 @@ func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Ti
 		return nil
 	}
 
-	expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, now)
+	expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
 	if err != nil {
 		s.cleanupMu.Lock()
 		s.lastSignedRoomCleanup = time.Time{}

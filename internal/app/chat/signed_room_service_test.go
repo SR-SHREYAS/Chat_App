@@ -523,7 +523,7 @@ func TestHandleListOwnedSignedRooms(t *testing.T) {
 			RoomName:    "expired-owner-1",
 			OwnerUserID: "1",
 			EntryCode:   "2222",
-			ExpiresAt:   time.Now().UTC().Add(-1 * time.Minute),
+			ExpiresAt:   time.Now().UTC().Add(-8 * 24 * time.Hour), // Expired beyond 7-day grace period
 		}
 		store.rooms["active-owner-2"] = model.SignedRoom{
 			ID:          "room-act-2",
@@ -717,8 +717,12 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		if err := service.HandleDeleteSignedRoom(context.Background(), "room-1", "1"); err != nil {
 			t.Fatalf("delete signed room: %v", err)
 		}
-		if _, ok := store.rooms["alpha"]; ok {
-			t.Fatalf("expected room to be deleted")
+		room, err := store.GetSignedRoomByID(context.Background(), "room-1")
+		if err != nil {
+			t.Fatalf("expected room to still exist (soft delete), got %v", err)
+		}
+		if room.ExpiresAt.After(time.Now().UTC()) {
+			t.Fatalf("expected room to be expired")
 		}
 	})
 
@@ -735,11 +739,10 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "room-1", "2"); !errors.Is(err, ErrRoomOwnedByAnotherUser) {
-			t.Fatalf("expected ErrRoomOwnedByAnotherUser, got %v", err)
-		}
-		if _, ok := store.rooms["alpha"]; !ok {
-			t.Fatalf("expected room to remain after rejected delete")
+		err := service.HandleDeleteSignedRoom(context.Background(), "room-1", "2")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound { // Since ExpireSignedRoom returns ErrNoRows for wrong owner
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 
@@ -756,11 +759,10 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(store)
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "room-expired", "1"); err != nil {
-			t.Fatalf("delete expired signed room: %v", err)
-		}
-		if _, err := store.GetSignedRoomByID(context.Background(), "room-expired"); !errors.Is(err, sql.ErrNoRows) {
-			t.Fatalf("expected expired room to be deleted, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), "room-expired", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError for already expired room, got %v", err)
 		}
 	})
 
@@ -768,8 +770,10 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "missing", "1"); !errors.Is(err, ErrSignedRoomNotFound) {
-			t.Fatalf("expected ErrSignedRoomNotFound, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), "missing", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 AppError, got %v", err)
 		}
 	})
 
@@ -777,19 +781,24 @@ func TestHandleDeleteSignedRoom(t *testing.T) {
 		service := NewService(noopMessageStore{})
 		service.BindSignedRoomStore(newFakeSignedRoomStore())
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), " ", "1"); !errors.Is(err, ErrInvalidRoomName) {
-			t.Fatalf("expected ErrInvalidRoomName, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), " ", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 AppError, got %v", err)
 		}
-		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", ""); !errors.Is(err, ErrInvalidRoomOwner) {
-			t.Fatalf("expected ErrInvalidRoomOwner, got %v", err)
+		err = service.HandleDeleteSignedRoom(context.Background(), "alpha", "")
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 AppError, got %v", err)
 		}
 	})
 
 	t.Run("store unavailable", func(t *testing.T) {
 		service := NewService(noopMessageStore{})
 
-		if err := service.HandleDeleteSignedRoom(context.Background(), "alpha", "1"); !errors.Is(err, ErrSignedRoomUnavailable) {
-			t.Fatalf("expected ErrSignedRoomUnavailable, got %v", err)
+		err := service.HandleDeleteSignedRoom(context.Background(), "alpha", "1")
+		var appErr *util.AppError
+		if !errors.As(err, &appErr) || appErr.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 AppError, got %v", err)
 		}
 	})
 }
