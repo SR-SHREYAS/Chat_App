@@ -8,13 +8,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 	"real_time_chat_app/internal/api"
 	authapp "real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
 	"real_time_chat_app/internal/middleware"
 	"real_time_chat_app/internal/store"
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 func main() {
@@ -37,15 +38,6 @@ func main() {
 	db.SetMaxIdleConns(25)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	schemaCtx, cancelSchema := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelSchema()
-
-	messageStore := store.NewMessageStore(db)
-	if err := messageStore.EnsureSchema(schemaCtx); err != nil {
-		log.Fatalf("Could not create messages table: %v", err)
-	}
-	log.Println("Messages table created or already exists.")
-
 	authCtx, cancelAuth := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelAuth()
 
@@ -63,6 +55,15 @@ func main() {
 		log.Fatalf("Could not create signed room tables: %v", err)
 	}
 	log.Println("Signed room tables created or already exist.")
+
+	schemaCtx, cancelSchema := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelSchema()
+
+	messageStore := store.NewMessageStore(db)
+	if err := messageStore.EnsureSchema(schemaCtx); err != nil {
+		log.Fatalf("Could not create messages table: %v", err)
+	}
+	log.Println("Messages table created or already exists.")
 
 	service := chat.NewService(messageStore)
 	service.BindSignedRoomStore(signedRoomStore)

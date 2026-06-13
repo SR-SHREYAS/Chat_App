@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/model"
+
+	"github.com/oklog/ulid/v2"
 )
 
 type SignedRoomStore struct {
@@ -28,55 +30,58 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 		}
 	}()
 
-	createTableQuery := fmt.Sprintf(`
+	createTableQuery := `
 	CREATE TABLE IF NOT EXISTS signed_rooms (
-		room_name VARCHAR(64) PRIMARY KEY,
-		owner_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		owner_display_name VARCHAR(64) NOT NULL,
-		entry_code VARCHAR(%d) NOT NULL,
+		id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
+		room_name TEXT NOT NULL CHECK (char_length(room_name) <= 64),
+		owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		entry_code TEXT NOT NULL CHECK (entry_code ~ '^[0-9]{4}$'),
 		expires_at TIMESTAMPTZ NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
-	`, model.SignedRoomEntryCodeLength)
+	`
+
+	constraintQuery := `
+	DO $$
+	BEGIN
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname = 'signed_rooms_entry_code_key'
+				AND conrelid = 'signed_rooms'::regclass
+		) THEN
+			ALTER TABLE signed_rooms
+				ADD CONSTRAINT signed_rooms_entry_code_key UNIQUE (entry_code);
+		END IF;
+	END $$;
+	`
 
 	indexQuery := `
 	CREATE INDEX IF NOT EXISTS idx_signed_rooms_owner_user_id ON signed_rooms(owner_user_id);
-	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at ON signed_rooms(expires_at);
+	CREATE INDEX IF NOT EXISTS idx_signed_rooms_expires_at_id ON signed_rooms(expires_at, id);
 	`
 
 	historyTableQuery := `
 	CREATE TABLE IF NOT EXISTS room_memberships (
-		user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		room_name VARCHAR(64) NOT NULL,
-		role VARCHAR(16) NOT NULL CHECK (role IN ('owned', 'joined')),
-		last_visited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		PRIMARY KEY (user_id, room_name, role)
+		room_id TEXT NOT NULL REFERENCES signed_rooms(id) ON DELETE CASCADE,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+		joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_visited_at TIMESTAMPTZ,
+		PRIMARY KEY (room_id, user_id)
 	);
 	`
 
 	historyIndexQuery := `
-	CREATE INDEX IF NOT EXISTS idx_room_memberships_user_last_visited ON room_memberships(user_id, last_visited_at DESC);
-	CREATE INDEX IF NOT EXISTS idx_room_memberships_room_name ON room_memberships(room_name);
+	CREATE INDEX IF NOT EXISTS idx_room_memberships_user_id ON room_memberships(user_id);
+	CREATE INDEX IF NOT EXISTS idx_room_memberships_room_id ON room_memberships(room_id);
 	`
-
-	minCode := model.SignedRoomEntryCodeMinValue()
-	rangeSize := model.SignedRoomEntryCodeRangeSize()
-	migrateEntryCodeQuery := fmt.Sprintf(`
-	ALTER TABLE signed_rooms
-		ADD COLUMN IF NOT EXISTS entry_code VARCHAR(%d);
-
-	UPDATE signed_rooms
-	SET entry_code = LPAD((%d + FLOOR(RANDOM() * %d))::INT::TEXT, %d, '0')
-	WHERE entry_code IS NULL OR entry_code !~ '^[0-9]{%d}$';
-
-	ALTER TABLE signed_rooms
-		ALTER COLUMN entry_code SET NOT NULL;
-	`, model.SignedRoomEntryCodeLength, minCode, rangeSize, model.SignedRoomEntryCodeLength, model.SignedRoomEntryCodeLength)
 
 	if _, err = tx.ExecContext(ctx, createTableQuery); err != nil {
 		return fmt.Errorf("create signed_rooms table: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, constraintQuery); err != nil {
+		return fmt.Errorf("create signed_rooms constraints: %w", err)
 	}
 	if _, err = tx.ExecContext(ctx, indexQuery); err != nil {
 		return fmt.Errorf("create signed_rooms indexes: %w", err)
@@ -87,67 +92,83 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 	if _, err = tx.ExecContext(ctx, historyIndexQuery); err != nil {
 		return fmt.Errorf("create room_memberships indexes: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, migrateEntryCodeQuery); err != nil {
-		return fmt.Errorf("migrate signed_rooms entry_code: %w", err)
-	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit signed_rooms schema transaction: %w", err)
 	}
 	return nil
 }
 
-func (s *SignedRoomStore) CreateSignedRoom(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
+func (s *SignedRoomStore) CreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	var room model.SignedRoom
+	roomID := ulid.Make().String()
 	query := `
-		INSERT INTO signed_rooms (room_name, owner_user_id, owner_display_name, entry_code, expires_at)
+		INSERT INTO signed_rooms (id, room_name, owner_user_id, entry_code, expires_at)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING room_name, owner_user_id, owner_display_name, entry_code, expires_at, created_at, updated_at
+		RETURNING id, room_name, owner_user_id, entry_code, expires_at, created_at, updated_at
 	`
-	err := s.db.QueryRowContext(ctx, query, roomName, ownerUserID, ownerDisplayName, entryCode, expiresAt).
-		Scan(&room.RoomName, &room.OwnerUserID, &room.OwnerDisplayName, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, query, roomID, roomName, ownerUserID, entryCode, expiresAt).
+		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
 	if err != nil {
 		return model.SignedRoom{}, err
 	}
 	return room, nil
 }
 
-func (s *SignedRoomStore) GetSignedRoomByName(ctx context.Context, roomName string) (model.SignedRoom, error) {
+func (s *SignedRoomStore) GetSignedRoomByID(ctx context.Context, roomID string) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	query := `
-		SELECT room_name, owner_user_id, owner_display_name, entry_code, expires_at, created_at, updated_at
-		FROM signed_rooms
-		WHERE room_name = $1
+		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
+		FROM signed_rooms sr
+		INNER JOIN users u ON u.id = sr.owner_user_id
+		WHERE sr.id = $1
 	`
-	err := s.db.QueryRowContext(ctx, query, roomName).
-		Scan(&room.RoomName, &room.OwnerUserID, &room.OwnerDisplayName, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, query, roomID).
+		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUsername, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
 	if err != nil {
 		return model.SignedRoom{}, err
 	}
 	return room, nil
 }
 
-func (s *SignedRoomStore) UpdateSignedRoomExpiry(ctx context.Context, roomName string, ownerUserID int64, ownerDisplayName, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
+func (s *SignedRoomStore) GetSignedRoomByNameAndCode(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+	var room model.SignedRoom
+	query := `
+		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
+		FROM signed_rooms sr
+		INNER JOIN users u ON u.id = sr.owner_user_id
+		WHERE sr.room_name = $1 AND sr.entry_code = $2
+	`
+	err := s.db.QueryRowContext(ctx, query, roomName, entryCode).
+		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUsername, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
+	if err != nil {
+		return model.SignedRoom{}, err
+	}
+	return room, nil
+}
+
+func (s *SignedRoomStore) UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	query := `
 		UPDATE signed_rooms
-		SET owner_display_name = $1, entry_code = $2, expires_at = $3, updated_at = NOW()
-		WHERE room_name = $4 AND owner_user_id = $5
-		RETURNING room_name, owner_user_id, owner_display_name, entry_code, expires_at, created_at, updated_at
+		SET entry_code = $1, expires_at = $2, updated_at = NOW()
+		WHERE id = $3 AND owner_user_id = $4
+		RETURNING id, room_name, owner_user_id, entry_code, expires_at, created_at, updated_at
 	`
-	err := s.db.QueryRowContext(ctx, query, ownerDisplayName, entryCode, expiresAt, roomName, ownerUserID).
-		Scan(&room.RoomName, &room.OwnerUserID, &room.OwnerDisplayName, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, query, entryCode, expiresAt, roomID, ownerUserID).
+		Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt)
 	if err != nil {
 		return model.SignedRoom{}, err
 	}
 	return room, nil
 }
 
-func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID int64) ([]model.SignedRoom, error) {
+func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error) {
 	query := `
-		SELECT room_name, owner_user_id, owner_display_name, entry_code, expires_at, created_at, updated_at
-		FROM signed_rooms
-		WHERE owner_user_id = $1 AND expires_at > NOW()
-		ORDER BY expires_at DESC, updated_at DESC
+		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
+		FROM signed_rooms sr
+		INNER JOIN users u ON u.id = sr.owner_user_id
+		WHERE sr.owner_user_id = $1 AND sr.expires_at > NOW()
+		ORDER BY sr.expires_at DESC, sr.updated_at DESC
 	`
 	rows, err := s.db.QueryContext(ctx, query, ownerUserID)
 	if err != nil {
@@ -158,7 +179,7 @@ func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID 
 	var rooms []model.SignedRoom
 	for rows.Next() {
 		var room model.SignedRoom
-		if err := rows.Scan(&room.RoomName, &room.OwnerUserID, &room.OwnerDisplayName, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt); err != nil {
+		if err := rows.Scan(&room.ID, &room.RoomName, &room.OwnerUserID, &room.OwnerUsername, &room.EntryCode, &room.ExpiresAt, &room.CreatedAt, &room.UpdatedAt); err != nil {
 			return nil, err
 		}
 		rooms = append(rooms, room)
@@ -169,67 +190,109 @@ func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID 
 	return rooms, nil
 }
 
-func (s *SignedRoomStore) DeleteSignedRoomByName(ctx context.Context, roomName string) error {
-	query := `DELETE FROM signed_rooms WHERE room_name = $1`
-	_, err := s.db.ExecContext(ctx, query, roomName)
+func (s *SignedRoomStore) DeleteSignedRoomByID(ctx context.Context, roomID string) error {
+	query := `DELETE FROM signed_rooms WHERE id = $1`
+	_, err := s.db.ExecContext(ctx, query, roomID)
 	return err
 }
 
-func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
+func (s *SignedRoomStore) ExpireSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
 	query := `
-		DELETE FROM signed_rooms
-		WHERE expires_at <= $1
-		RETURNING room_name
+		UPDATE signed_rooms
+		SET expires_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND owner_user_id = $2 AND expires_at > NOW()
 	`
-	rows, err := s.db.QueryContext(ctx, query, now)
+	res, err := s.db.ExecContext(ctx, query, roomID, ownerUserID)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-
-	var roomNames []string
-	for rows.Next() {
-		var roomName string
-		if err := rows.Scan(&roomName); err != nil {
-			return nil, err
-		}
-		roomNames = append(roomNames, roomName)
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
 	}
-	return roomNames, nil
+	return nil
 }
 
-func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID int64, roomName, role string) error {
+func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
+	const batchSize = 1000
+
+	var roomIDs []string
+	for {
+		query := `
+			WITH expired AS (
+				SELECT id
+				FROM signed_rooms
+				WHERE expires_at <= $1
+				ORDER BY expires_at, id
+				LIMIT $2
+			)
+			DELETE FROM signed_rooms sr
+			USING expired e
+			WHERE sr.id = e.id
+			RETURNING sr.id
+		`
+		rows, err := s.db.QueryContext(ctx, query, now, batchSize)
+		if err != nil {
+			return nil, err
+		}
+
+		// Keep batches deterministic and aligned with idx_signed_rooms_expires_at_id.
+		batchIDs := make([]string, 0, batchSize)
+		for rows.Next() {
+			var roomID string
+			if err := rows.Scan(&roomID); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			batchIDs = append(batchIDs, roomID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+
+		roomIDs = append(roomIDs, batchIDs...)
+		if len(batchIDs) < batchSize {
+			return roomIDs, nil
+		}
+	}
+}
+
+func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error {
 	query := `
-		INSERT INTO room_memberships (user_id, room_name, role, last_visited_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (user_id, room_name, role)
+		INSERT INTO room_memberships (room_id, user_id, role, joined_at, last_visited_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (room_id, user_id)
 		DO UPDATE SET last_visited_at = EXCLUDED.last_visited_at
 	`
-	if _, err := s.db.ExecContext(ctx, query, userID, roomName, role); err != nil {
+	if _, err := s.db.ExecContext(ctx, query, roomID, userID, role); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *SignedRoomStore) GetRoomMembership(ctx context.Context, userID int64, roomName, role string) (model.RoomHistory, error) {
+func (s *SignedRoomStore) GetRoomMembership(ctx context.Context, userID string, roomID string) (model.RoomHistory, error) {
 	var item model.RoomHistory
 	query := `
-		SELECT room_name, role, last_visited_at
+		SELECT room_id, role, joined_at, COALESCE(last_visited_at, joined_at)
 		FROM room_memberships
-		WHERE user_id = $1 AND room_name = $2 AND role = $3
+		WHERE user_id = $1 AND room_id = $2
 	`
-	err := s.db.QueryRowContext(ctx, query, userID, roomName, role).
-		Scan(&item.RoomName, &item.Role, &item.LastVisitedAt)
+	err := s.db.QueryRowContext(ctx, query, userID, roomID).
+		Scan(&item.RoomID, &item.Role, &item.JoinedAt, &item.LastVisitedAt)
 	if err != nil {
 		return model.RoomHistory{}, err
 	}
 	return item, nil
 }
 
-func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID int64, limit int) error {
+func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID string, limit int) error {
 	if limit < 1 {
 		limit = 1
 	}
@@ -237,13 +300,13 @@ func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID int64
 	query := `
 		DELETE FROM room_memberships
 		WHERE user_id = $1
-			AND room_name NOT IN (
-				SELECT room_name
+			AND room_id NOT IN (
+				SELECT room_id
 				FROM (
-					SELECT room_name, MAX(last_visited_at) AS latest_visit
+					SELECT room_id, MAX(COALESCE(last_visited_at, joined_at)) AS latest_visit
 					FROM room_memberships
 					WHERE user_id = $1
-					GROUP BY room_name
+					GROUP BY room_id
 					ORDER BY latest_visit DESC
 					LIMIT $2
 				) kept_rooms
@@ -253,33 +316,37 @@ func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID int64
 	return err
 }
 
-func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID int64, limit int) ([]model.RoomHistory, error) {
+func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID string, limit int) ([]model.RoomHistory, error) {
 	if limit < 1 {
 		limit = 1
 	}
 
 	query := `
 		WITH kept_rooms AS (
-			SELECT room_name, MAX(last_visited_at) AS latest_visit
+			SELECT room_id, MAX(COALESCE(last_visited_at, joined_at)) AS latest_visit
 			FROM room_memberships
 			WHERE user_id = $1
-			GROUP BY room_name
+			GROUP BY room_id
 			ORDER BY latest_visit DESC
 			LIMIT $2
 		)
 		SELECT
-			h.room_name,
+			h.room_id,
+			sr.room_name,
 			h.role,
-			COALESCE(sr.owner_display_name, ''),
-			COALESCE(sr.entry_code, ''),
+			sr.owner_user_id,
+			u.username AS owner_username,
+			sr.entry_code,
 			sr.expires_at,
-			h.last_visited_at,
-			COALESCE(sr.room_name IS NOT NULL AND sr.expires_at > NOW(), false) AS active
+			h.joined_at,
+			COALESCE(h.last_visited_at, h.joined_at),
+			sr.expires_at > NOW() AS active
 		FROM room_memberships h
-		INNER JOIN kept_rooms kr ON kr.room_name = h.room_name
-		LEFT JOIN signed_rooms sr ON sr.room_name = h.room_name
+		INNER JOIN kept_rooms kr ON kr.room_id = h.room_id
+		INNER JOIN signed_rooms sr ON sr.id = h.room_id
+		INNER JOIN users u ON u.id = sr.owner_user_id
 		WHERE h.user_id = $1
-		ORDER BY active DESC, h.last_visited_at DESC
+		ORDER BY active DESC, COALESCE(h.last_visited_at, h.joined_at) DESC
 	`
 	rows, err := s.db.QueryContext(ctx, query, userID, limit)
 	if err != nil {
@@ -291,7 +358,7 @@ func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID int64,
 	for rows.Next() {
 		var item model.RoomHistory
 		var expiresAt sql.NullTime
-		if err := rows.Scan(&item.RoomName, &item.Role, &item.OwnerDisplayName, &item.EntryCode, &expiresAt, &item.LastVisitedAt, &item.Active); err != nil {
+		if err := rows.Scan(&item.RoomID, &item.RoomName, &item.Role, &item.OwnerUserID, &item.OwnerUsername, &item.EntryCode, &expiresAt, &item.JoinedAt, &item.LastVisitedAt, &item.Active); err != nil {
 			return nil, err
 		}
 		if expiresAt.Valid {

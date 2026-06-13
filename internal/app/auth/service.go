@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/mail"
 	"strings"
 	"time"
@@ -20,31 +21,33 @@ const (
 	SessionCookieName = "chat_session"
 	SessionTTL        = 30 * 24 * time.Hour
 	minPasswordLength = 8
-	maxDisplayNameLen = 32
+	maxUsernameLen    = 32
 )
 
 var (
-	ErrInvalidEmail       = errors.New("invalid email")
-	ErrInvalidPassword    = errors.New("invalid password")
-	ErrInvalidDisplayName = errors.New("invalid display name")
-	ErrEmailAlreadyExists = errors.New("email already exists")
-	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrInvalidEmail          = errors.New("invalid email")
+	ErrInvalidPassword       = errors.New("invalid password")
+	ErrInvalidUsername       = errors.New("invalid username")
+	ErrEmailAlreadyExists    = errors.New("email already exists")
+	ErrUsernameAlreadyExists = errors.New("username already exists")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrUserNotFound          = errors.New("user not found")
 )
 
 type AuthStore interface {
-	CreateUser(ctx context.Context, email, displayName, passwordHash string) (model.User, error)
+	CreateUser(ctx context.Context, email, username, passwordHash string) (model.User, error)
 	GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error)
-	CreateSession(ctx context.Context, userID int64, tokenHash string, expiresAt time.Time) error
+	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error
 	GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error)
-	UpdateDisplayName(ctx context.Context, userID int64, displayName string) (model.User, error)
+	UpdateUsername(ctx context.Context, userID string, username string) (model.User, error)
 	DeleteSession(ctx context.Context, tokenHash string) error
 	DeleteExpiredSessions(ctx context.Context) error
 }
 
 type SignUpInput struct {
-	Email       string
-	Password    string
-	DisplayName string
+	Email    string
+	Username string
+	Password string
 }
 
 type SignInInput struct {
@@ -53,9 +56,9 @@ type SignInInput struct {
 }
 
 type AuthUser struct {
-	ID          int64  `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
 }
 
 type AuthResult struct {
@@ -82,9 +85,9 @@ func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResu
 		return AuthResult{}, ErrInvalidPassword
 	}
 
-	displayName := normalizeDisplayName(input.DisplayName)
-	if displayName == "" {
-		return AuthResult{}, ErrInvalidDisplayName
+	username := normalizeUsername(input.Username)
+	if username == "" {
+		return AuthResult{}, ErrInvalidUsername
 	}
 
 	passwordHash, err := hashPassword(password)
@@ -92,10 +95,13 @@ func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResu
 		return AuthResult{}, err
 	}
 
-	user, err := s.store.CreateUser(ctx, email, displayName, passwordHash)
+	user, err := s.store.CreateUser(ctx, email, username, passwordHash)
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicateEmail) {
 			return AuthResult{}, ErrEmailAlreadyExists
+		}
+		if errors.Is(err, store.ErrDuplicateUsername) {
+			return AuthResult{}, ErrUsernameAlreadyExists
 		}
 		return AuthResult{}, err
 	}
@@ -153,15 +159,15 @@ func (s *Service) HandleSignOut(ctx context.Context, sessionToken string) error 
 	return s.store.DeleteSession(ctx, hashSessionToken(sessionToken))
 }
 
-func (s *Service) HandleUpdateDisplayName(ctx context.Context, sessionToken, displayName string) (AuthUser, error) {
+func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, username string) (AuthUser, error) {
 	sessionToken = strings.TrimSpace(sessionToken)
 	if sessionToken == "" {
 		return AuthUser{}, ErrInvalidCredentials
 	}
 
-	displayName = normalizeDisplayName(displayName)
-	if displayName == "" {
-		return AuthUser{}, ErrInvalidDisplayName
+	username = normalizeUsername(username)
+	if username == "" {
+		return AuthUser{}, ErrInvalidUsername
 	}
 
 	user, err := s.store.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
@@ -172,8 +178,14 @@ func (s *Service) HandleUpdateDisplayName(ctx context.Context, sessionToken, dis
 		return AuthUser{}, err
 	}
 
-	updatedUser, err := s.store.UpdateDisplayName(ctx, user.ID, displayName)
+	updatedUser, err := s.store.UpdateUsername(ctx, user.ID, username)
 	if err != nil {
+		if errors.Is(err, store.ErrDuplicateUsername) {
+			return AuthUser{}, ErrUsernameAlreadyExists
+		}
+		if errors.Is(err, store.ErrUserNotFound) {
+			return AuthUser{}, fmt.Errorf("user not found for valid session: %w", ErrUserNotFound)
+		}
 		return AuthUser{}, err
 	}
 
@@ -211,17 +223,17 @@ func normalizeEmail(email string) (string, error) {
 	return trimmed, nil
 }
 
-func normalizeDisplayName(displayName string) string {
-	displayName = strings.TrimSpace(displayName)
-	if displayName == "" {
+func normalizeUsername(username string) string {
+	username = strings.TrimSpace(username)
+	if username == "" {
 		return ""
 	}
 
-	runes := []rune(displayName)
-	if len(runes) > maxDisplayNameLen {
-		return string(runes[:maxDisplayNameLen])
+	runes := []rune(username)
+	if len(runes) > maxUsernameLen {
+		return string(runes[:maxUsernameLen])
 	}
-	return displayName
+	return username
 }
 
 func generateSessionTokenPair() (rawToken, tokenHash string, err error) {
@@ -242,8 +254,8 @@ func hashSessionToken(token string) string {
 
 func toAuthUser(user model.User) AuthUser {
 	return AuthUser{
-		ID:          user.ID,
-		Email:       user.Email,
-		DisplayName: user.DisplayName,
+		ID:       user.ID,
+		Email:    user.Email,
+		Username: user.Username,
 	}
 }

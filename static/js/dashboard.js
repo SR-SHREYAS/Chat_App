@@ -1,7 +1,7 @@
-const displayNameText = document.getElementById("displayNameText");
+const usernameText = document.getElementById("usernameText");
 const editNameBtn = document.getElementById("editNameBtn");
 const editNamePanel = document.getElementById("editNamePanel");
-const displayNameInput = document.getElementById("displayNameInput");
+const usernameInput = document.getElementById("usernameInput");
 const saveNameBtn = document.getElementById("saveNameBtn");
 
 const signoutBtn = document.getElementById("signoutBtn");
@@ -51,9 +51,9 @@ function setMessage(text, isError = false) {
   dashboardMessage.classList.toggle("error", Boolean(isError && text));
 }
 
-function updateDisplayNameUI(name) {
-  displayNameText.textContent = name;
-  displayNameInput.value = name;
+function updateUsernameUI(name) {
+  usernameText.textContent = name;
+  usernameInput.value = name;
 }
 
 function formatExpiry(expiresAt) {
@@ -111,9 +111,12 @@ function renderRoomHistorySlide(index, rooms) {
     const lastSeen = document.createElement("span");
     lastSeen.textContent = `latest ${formatLastVisited(room.last_visited_at)}`;
 
+    const roomID = document.createElement("span");
+    roomID.textContent = `ID ${room.room_id}`;
+
     const meta = document.createElement("div");
     meta.className = "owned-room-meta";
-    meta.append(code, expiry, lastSeen);
+    meta.append(roomID, code, expiry, lastSeen);
 
     const actions = document.createElement("div");
     actions.className = "owned-room-actions";
@@ -125,14 +128,14 @@ function renderRoomHistorySlide(index, rooms) {
       openBtn.textContent = "Open";
       openBtn.addEventListener("click", () => {
         if (room.entry_code) {
-          ChatEntryCode.persistEntryCodeForRoom(room.room_name, room.entry_code);
+          ChatEntryCode.persistEntryCodeForRoom(room.room_id, room.entry_code);
         }
         window.location.href = room.chat_url;
       });
       actions.appendChild(openBtn);
     }
 
-    if (room.active && room.role === "owned") {
+    if (room.active && room.role === "owner") {
       const extendBtn = document.createElement("button");
       extendBtn.className = "extend-room-btn";
       extendBtn.type = "button";
@@ -151,7 +154,9 @@ function renderRoomHistorySlide(index, rooms) {
         }
       });
       actions.appendChild(extendBtn);
+    }
 
+    if (room.active && room.role === "owner") {
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "delete-room-btn";
       deleteBtn.type = "button";
@@ -164,7 +169,7 @@ function renderRoomHistorySlide(index, rooms) {
 
         button.disabled = true;
         try {
-          await deleteSignedRoom(room.room_name);
+          await deleteSignedRoom(room.room_id, room.room_name);
         } catch (_err) {
           button.disabled = false;
         }
@@ -172,7 +177,7 @@ function renderRoomHistorySlide(index, rooms) {
       actions.appendChild(deleteBtn);
     }
 
-    if (!room.active && room.role === "owned") {
+    if (!room.active && room.role === "owner") {
       const reviveBtn = document.createElement("button");
       reviveBtn.className = "revive-room-btn";
       reviveBtn.type = "button";
@@ -185,12 +190,40 @@ function renderRoomHistorySlide(index, rooms) {
 
         button.disabled = true;
         try {
-          await reviveSignedRoom(room.room_name);
+          await reviveSignedRoom(room.room_id, room.room_name);
         } catch (_err) {
           button.disabled = false;
         }
       });
       actions.appendChild(reviveBtn);
+
+      const purgeBtn = document.createElement("button");
+      purgeBtn.className = "delete-room-btn";
+      purgeBtn.type = "button";
+      purgeBtn.textContent = "Permanently Delete";
+      purgeBtn.addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) {
+          return;
+        }
+
+        const confirmed = confirm(`Permanently delete the room "${room.room_name}" and all its contents?\n\nThis cannot be undone.`);
+        if (!confirmed) {
+          return;
+        }
+
+        button.disabled = true;
+        try {
+          const ok = await purgeSignedRoom(room.room_id, room.room_name);
+          if (ok) {
+            return;
+          }
+        } catch (_err) {
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.appendChild(purgeBtn);
     }
 
     row.append(name, meta, actions);
@@ -225,7 +258,7 @@ async function loadSession() {
       return false;
     }
 
-    updateDisplayNameUI(payload.user.display_name);
+    updateUsernameUI(payload.user.username);
     return true;
   } catch (_err) {
     window.location.href = "/";
@@ -365,7 +398,7 @@ async function createSignedRoom() {
     if (payload.chat_url) {
       if (payload.entry_code) {
         roomCodeInput.value = payload.entry_code;
-        ChatEntryCode.persistEntryCodeForRoom(room, payload.entry_code);
+        ChatEntryCode.persistEntryCodeForRoom(payload.room_id, payload.entry_code);
       }
       window.location.href = payload.chat_url;
       return;
@@ -378,9 +411,9 @@ async function createSignedRoom() {
 }
 
 async function joinSignedRoom() {
-  const room = normalizeRoomInput();
-  if (!room) {
-    setMessage("Please enter a room name.", true);
+  const roomID = normalizeRoomInput();
+  if (!roomID) {
+    setMessage("Please enter a room ID.", true);
     return;
   }
   const codeParsed = ChatEntryCode.parseEntryCode(roomCodeInput.value);
@@ -398,7 +431,7 @@ async function joinSignedRoom() {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ room_name: room, entry_code: codeParsed.value }),
+      body: JSON.stringify({ room_id: roomID, entry_code: codeParsed.value }),
     });
 
     const payload = await res.json().catch(() => ({}));
@@ -407,8 +440,8 @@ async function joinSignedRoom() {
     }
 
     if (payload.chat_url) {
-      if (codeParsed.value) {
-        ChatEntryCode.persistEntryCodeForRoom(room, codeParsed.value);
+      if (codeParsed.value && payload.room_id) {
+        ChatEntryCode.persistEntryCodeForRoom(payload.room_id, codeParsed.value);
       }
       window.location.href = payload.chat_url;
       return;
@@ -420,14 +453,14 @@ async function joinSignedRoom() {
   }
 }
 
-async function deleteSignedRoom(roomName) {
-  if (!roomName) {
+async function deleteSignedRoom(roomID, roomName) {
+  if (!roomID) {
     return;
   }
 
   setMessage("");
   try {
-    const res = await fetch(`/api/rooms/delete?room=${encodeURIComponent(roomName)}`, {
+    const res = await fetch(`/api/rooms/delete?room_id=${encodeURIComponent(roomID)}`, {
       method: "DELETE",
       credentials: "same-origin",
       headers: { Accept: "application/json" },
@@ -447,8 +480,37 @@ async function deleteSignedRoom(roomName) {
   }
 }
 
-async function reviveSignedRoom(roomName) {
-  if (!roomName) {
+async function purgeSignedRoom(roomID, roomName) {
+  if (!roomID) {
+    return false;
+  }
+
+  setMessage("");
+  try {
+    const res = await fetch(`/api/rooms/purge?room_id=${encodeURIComponent(roomID)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(payload.error || "Could not permanently delete room");
+    }
+
+    await loadRoomHistory();
+    setMessage(`Permanently deleted room "${roomName}".`);
+    return true;
+  } catch (err) {
+    console.error(err);
+    const msg = err instanceof Error ? err.message : String(err || "Could not permanently delete room");
+    setMessage(msg || "Could not permanently delete room", true);
+    return false;
+  }
+}
+
+async function reviveSignedRoom(roomID, roomName) {
+  if (!roomID) {
     return;
   }
 
@@ -458,7 +520,7 @@ async function reviveSignedRoom(roomName) {
     throw new Error(ttlParsed.error);
   }
 
-  const body = { room_name: roomName };
+  const body = { room_id: roomID };
   if (ttlParsed && ttlParsed.value != null) {
     body.ttl_minutes = ttlParsed.value;
   }
@@ -481,7 +543,7 @@ async function reviveSignedRoom(roomName) {
     }
 
     if (payload.entry_code) {
-      ChatEntryCode.persistEntryCodeForRoom(roomName, payload.entry_code);
+      ChatEntryCode.persistEntryCodeForRoom(roomID, payload.entry_code);
     }
     await loadRoomHistory();
     setMessage(`Revived room "${roomName}".`);
@@ -493,8 +555,9 @@ async function reviveSignedRoom(roomName) {
 }
 
 async function extendSignedRoom(room) {
+  const roomID = room && room.room_id;
   const roomName = room && room.room_name;
-  if (!roomName) {
+  if (!roomID) {
     return;
   }
 
@@ -504,7 +567,7 @@ async function extendSignedRoom(room) {
     throw new Error(ttlParsed.error);
   }
 
-  const body = { room_name: roomName };
+  const body = { room_id: roomID };
   if (ttlParsed && ttlParsed.value != null) {
     body.ttl_minutes = ttlParsed.value;
   }
@@ -527,7 +590,7 @@ async function extendSignedRoom(room) {
     }
 
     if (payload.entry_code) {
-      ChatEntryCode.persistEntryCodeForRoom(roomName, payload.entry_code);
+      ChatEntryCode.persistEntryCodeForRoom(roomID, payload.entry_code);
     }
     await loadRoomHistory();
     setMessage(`Extended room "${roomName}".`);
@@ -549,42 +612,42 @@ function runPreferredRoomAction() {
 editNameBtn.addEventListener("click", () => {
   editNamePanel.classList.toggle("hidden");
   if (!editNamePanel.classList.contains("hidden")) {
-    displayNameInput.focus();
-    displayNameInput.select();
+    usernameInput.focus();
+    usernameInput.select();
   }
 });
 
 saveNameBtn.addEventListener("click", async () => {
-  const displayName = displayNameInput.value.trim();
-  if (!displayName) {
-    setMessage("Display name cannot be empty.", true);
+  const username = usernameInput.value.trim();
+  if (!username) {
+    setMessage("Username cannot be empty.", true);
     return;
   }
 
   setMessage("");
   try {
-    const res = await fetch("/api/auth/display-name", {
+    const res = await fetch("/api/auth/username", {
       method: "POST",
       credentials: "same-origin",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ display_name: displayName }),
+      body: JSON.stringify({ username: username }),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(payload.error || "Could not update display name");
+      throw new Error(payload.error || "Could not update username");
     }
-    if (payload.user && payload.user.display_name) {
-      updateDisplayNameUI(payload.user.display_name);
+    if (payload.user && payload.user.username) {
+      updateUsernameUI(payload.user.username);
       editNamePanel.classList.add("hidden");
-      setMessage("Display name updated.");
+      setMessage("Username updated.");
       return;
     }
     throw new Error("Unexpected response");
   } catch (err) {
-    setMessage(err.message || "Could not update display name", true);
+    setMessage(err.message || "Could not update username", true);
   }
 });
 

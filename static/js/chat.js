@@ -1,9 +1,9 @@
 const params = new URLSearchParams(window.location.search);
-const room = params.get("room");
+const roomMode = resolveRoomMode(params);
 let roomCode = "";
 
-if (!room) {
-  alert("No room specified. Redirecting to homepage...");
+if (roomMode.error) {
+  alert(roomMode.error);
   window.location.href = "/";
 }
 
@@ -38,8 +38,63 @@ function isValidEntryCode(value) {
   return ChatEntryCode.isValidEntryCode(value);
 }
 
+function resolveRoomMode(params) {
+  const hasSignedRoomParam = params.has("room_id");
+  const hasUnsignedRoomParam = params.has("room");
+  const signedRoomID = hasSignedRoomParam ? params.get("room_id") : "";
+  const unsignedRoomName = hasUnsignedRoomParam ? params.get("room") : "";
+
+  if (hasSignedRoomParam && hasUnsignedRoomParam) {
+    return { error: "Ambiguous room link. Redirecting to homepage..." };
+  }
+
+  if (hasSignedRoomParam && !signedRoomID) {
+    return { error: "Invalid room link. Redirecting to homepage..." };
+  }
+
+  if (hasUnsignedRoomParam && !unsignedRoomName) {
+    return { error: "No room specified. Redirecting to homepage..." };
+  }
+
+  if (!hasSignedRoomParam && !hasUnsignedRoomParam) {
+    return { error: "No room specified. Redirecting to homepage..." };
+  }
+
+  if (hasSignedRoomParam) {
+    return {
+      type: "signed",
+      roomID: signedRoomID,
+      queryParam: "room_id",
+      queryValue: signedRoomID,
+    };
+  }
+
+  return {
+    type: "unsigned",
+    roomID: null,
+    queryParam: "room",
+    queryValue: unsignedRoomName,
+  };
+}
+
 function loadRoomEntryCode() {
-  roomCode = ChatEntryCode.loadEntryCodeForRoom(room);
+  if (roomMode.type === "signed") {
+    // Primary: key by stable signed room ID.
+    let code = ChatEntryCode.loadEntryCodeForRoom(roomMode.roomID);
+
+    // Backward compatibility: if nothing found, try legacy name-based key.
+    if (!isValidEntryCode(code)) {
+      const legacyKey = params.get("room") || params.get("room_name") || "";
+      if (legacyKey) {
+        code = ChatEntryCode.loadEntryCodeForRoom(legacyKey);
+      }
+    }
+
+    roomCode = code;
+    return;
+  }
+
+  roomCode = "";
 }
 
 function parseExpiry(raw) {
@@ -141,12 +196,15 @@ async function loadRoomConfig() {
 }
 
 async function resolveRoomExpiryFromAPI() {
-  if (roomExpiryTime) {
+  if (roomMode.type !== "signed" || roomExpiryTime) {
+    if (roomMode.type === "signed" && !isValidEntryCode(roomCode)) {
+      markRoomUnavailable("Room TTL: restricted", "Entry code required to access this room.");
+    }
     return;
   }
 
   try {
-    const res = await fetch(`/api/rooms/status?room=${encodeURIComponent(room)}`, {
+    const res = await fetch(`/api/rooms/status?room_id=${encodeURIComponent(roomMode.roomID)}`, {
       method: "GET",
       credentials: "same-origin",
       headers: { Accept: "application/json" },
@@ -194,9 +252,9 @@ function connect() {
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const qs = new URLSearchParams({
-    room,
     user_id: userId,
   });
+  qs.set(roomMode.queryParam, roomMode.queryValue);
   socket = new WebSocket(`${protocol}//${location.host}/room?${qs.toString()}`);
 
   socket.onopen = () => {
@@ -212,6 +270,41 @@ function connect() {
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+
+      console.log("WebSocket received data:", data);
+
+      if (data.type === "error" && data.code === "room_deleted") {
+        markRoomUnavailable("Room TTL: expired", data.message);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, "room deleted");
+        }
+        return;
+      }
+
+      if (data.type === "error" && data.code === "message_too_long") {
+        showStatus(`Message too long (max ${MAX_MESSAGE_LEN} characters).`);
+        setTimeout(() => {
+          if (!roomExpired && socket.readyState === WebSocket.OPEN) {
+            statusDiv.style.display = "none";
+          }
+        }, 4000);
+        return;
+      }
+
+      if (data.type === "error") {
+        console.error("Chat error event:", data);
+        const message =
+          typeof data.message === "string" && data.message.trim().length > 0
+            ? data.message
+            : "An error occurred while sending your message. Please try again.";
+        showStatus(message);
+        setTimeout(() => {
+          if (!roomExpired && socket.readyState === WebSocket.OPEN) {
+            statusDiv.style.display = "none";
+          }
+        }, 4000);
+        return;
+      }
 
       if (data.name === "System") {
         const sysDiv = document.createElement("div");
@@ -288,22 +381,34 @@ function sendMessage() {
 
 document.getElementById("sendBtn").addEventListener("click", sendMessage);
 
-document.getElementById("msg").addEventListener("keyup", function (event) {
+const MAX_MESSAGE_LEN = 2000;
+const msgInput = document.getElementById("msg");
+
+msgInput.maxLength = MAX_MESSAGE_LEN;
+msgInput.addEventListener("input", () => {
+  if (msgInput.value.length > MAX_MESSAGE_LEN) {
+    msgInput.value = msgInput.value.slice(0, MAX_MESSAGE_LEN);
+  }
+});
+
+msgInput.addEventListener("keyup", function (event) {
   if (event.key === "Enter") {
     sendMessage();
   }
 });
 
-loadRoomConfig().finally(() => {
-  loadRoomEntryCode();
-  resolveRoomExpiryFromAPI().finally(() => {
-    renderRoomCode();
-    if (roomExpired) {
-      return;
-    }
-    if (roomExpiryTime) {
-      startCountdown();
-    }
-    connect();
+if (!roomMode.error) {
+  loadRoomConfig().finally(() => {
+    loadRoomEntryCode();
+    resolveRoomExpiryFromAPI().finally(() => {
+      renderRoomCode();
+      if (roomExpired) {
+        return;
+      }
+      if (roomExpiryTime) {
+        startCountdown();
+      }
+      connect();
+    });
   });
-});
+}

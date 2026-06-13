@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -13,9 +14,9 @@ import (
 )
 
 type signUpRequest struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	DisplayName string `json:"display_name"`
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type signInRequest struct {
@@ -23,8 +24,8 @@ type signInRequest struct {
 	Password string `json:"password"`
 }
 
-type updateDisplayNameRequest struct {
-	DisplayName string `json:"display_name"`
+type updateUsernameRequest struct {
+	Username string `json:"username"`
 }
 
 type authEnvelope struct {
@@ -53,15 +54,15 @@ func (h *Handler) handleSignUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.authService.HandleSignUp(r.Context(), auth.SignUpInput{
-		Email:       req.Email,
-		Password:    req.Password,
-		DisplayName: req.DisplayName,
+		Email:    req.Email,
+		Password: req.Password,
+		Username: req.Username,
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrInvalidEmail), errors.Is(err, auth.ErrInvalidPassword), errors.Is(err, auth.ErrInvalidDisplayName):
+		case errors.Is(err, auth.ErrInvalidEmail), errors.Is(err, auth.ErrInvalidPassword), errors.Is(err, auth.ErrInvalidUsername):
 			writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
-		case errors.Is(err, auth.ErrEmailAlreadyExists):
+		case errors.Is(err, auth.ErrEmailAlreadyExists), errors.Is(err, auth.ErrUsernameAlreadyExists):
 			writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 		default:
 			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "could not create account"})
@@ -153,7 +154,7 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleUpdateUsername(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -169,21 +170,26 @@ func (h *Handler) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req updateDisplayNameRequest
+	var req updateUsernameRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "invalid request body"})
 		return
 	}
 
-	updatedUser, err := h.authService.HandleUpdateDisplayName(r.Context(), sessionToken, req.DisplayName)
+	updatedUser, err := h.authService.HandleUpdateUsername(r.Context(), sessionToken, req.Username)
 	if err != nil {
 		switch {
-		case errors.Is(err, auth.ErrInvalidDisplayName):
+		case errors.Is(err, auth.ErrInvalidUsername):
 			writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
+		case errors.Is(err, auth.ErrUsernameAlreadyExists):
+			writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
+		case errors.Is(err, auth.ErrUserNotFound):
+			log.Printf("auth: user missing for valid session while updating username: %v", err)
+			writeJSON(w, http.StatusUnauthorized, errorEnvelope{Error: "not signed in"})
 		default:
-			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "could not update display name"})
+			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "could not update username"})
 		}
 		return
 	}

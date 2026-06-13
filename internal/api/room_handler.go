@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"real_time_chat_app/internal/app/auth"
@@ -19,23 +20,24 @@ type createSignedRoomRequest struct {
 }
 
 type reviveSignedRoomRequest struct {
-	RoomName   string `json:"room_name"`
+	RoomID     string `json:"room_id"`
 	TTLMinutes int    `json:"ttl_minutes"`
 }
 
 type extendSignedRoomRequest struct {
-	RoomName   string `json:"room_name"`
+	RoomID     string `json:"room_id"`
 	TTLMinutes int    `json:"ttl_minutes"`
 }
 
 type joinSignedRoomRequest struct {
-	RoomName  string `json:"room_name"`
+	RoomID    string `json:"room_id"`
 	EntryCode string `json:"entry_code"`
 }
 
 type signedRoomEnvelope struct {
+	RoomID           string `json:"room_id"`
 	RoomName         string `json:"room_name"`
-	OwnerDisplayName string `json:"owner_display_name"`
+	OwnerUsername    string `json:"owner_username,omitempty"`
 	EntryCode        string `json:"entry_code,omitempty"`
 	ExpiresAt        string `json:"expires_at"`
 	ExpiresInSeconds int64  `json:"expires_in_seconds"`
@@ -57,9 +59,10 @@ type roomHistoryEnvelope struct {
 }
 
 type roomHistoryItemEnvelope struct {
+	RoomID           string `json:"room_id"`
 	RoomName         string `json:"room_name"`
 	Role             string `json:"role"`
-	OwnerDisplayName string `json:"owner_display_name,omitempty"`
+	OwnerUsername    string `json:"owner_username,omitempty"`
 	EntryCode        string `json:"entry_code,omitempty"`
 	ExpiresAt        string `json:"expires_at,omitempty"`
 	ExpiresInSeconds int64  `json:"expires_in_seconds"`
@@ -97,7 +100,7 @@ func (h *Handler) handleCreateSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	room, err := h.chatService.HandleCreateSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
+	room, err := h.chatService.HandleCreateSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, ttl)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
 		return
@@ -128,7 +131,7 @@ func (h *Handler) handleReviveSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	room, err := h.chatService.HandleReviveSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
+	room, err := h.chatService.HandleReviveSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomID, 64), authUser.ID, ttl)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
 		return
@@ -159,7 +162,7 @@ func (h *Handler) handleExtendSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	room, err := h.chatService.HandleExtendSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomName, 64), authUser.ID, authUser.DisplayName, ttl)
+	room, err := h.chatService.HandleExtendSignedRoom(r.Context(), util.SanitizeQueryValue(req.RoomID, 64), authUser.ID, ttl)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
 		return
@@ -182,44 +185,85 @@ func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) joinSignedRoom(w http.ResponseWriter, r *http.Request) {
+	// panic recovery
+	defer func() {
+		if err := recover(); err != nil {
+			log.Printf("[PANIC RECOVERED] joinSignedRoom: %v", err)
+			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "internal server error"})
+		}
+	}()
+
+	// Validate HTTP method directly in the handler
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	// Authentication
 	authUser, ok := h.requireAuthenticatedUser(w, r)
 	if !ok {
 		return
 	}
 
+	// Verify incoming request structure
 	var req joinSignedRoomRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "invalid request body"})
 		return
 	}
-	roomName := util.SanitizeQueryValue(req.RoomName, 64)
+
+	roomName := util.SanitizeQueryValue(req.RoomID, 64)
+	entryCode := strings.TrimSpace(req.EntryCode)
+
+	if roomName == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room name is required"})
+		return
+	}
+	if len(entryCode) != chat.SignedRoomCodeLength {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "invalid entry code format"})
+		return
+	}
+
 	joinScope := h.newSignedRoomJoinScope(r, roomName, authUser)
 	if h.isSignedRoomJoinBlocked(joinScope) {
 		writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: "too many failed entry code attempts; retry later"})
 		return
 	}
 
-	room, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, req.EntryCode)
+	// Call to service layer with request context
+	room, err := h.chatService.JoinSignedRoom(r.Context(), roomName, entryCode)
 	if err != nil {
-		if errors.Is(err, chat.ErrInvalidRoomEntryCode) {
-			h.recordSignedRoomJoinFailure(joinScope)
-			if h.isSignedRoomJoinBlocked(joinScope) {
-				writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: "too many failed entry code attempts; retry later"})
-				return
+		var appErr *util.AppError
+		if errors.As(err, &appErr) {
+			// Handle the rate-limit failure logic for forbidden entry attempts
+			if appErr.StatusCode == http.StatusForbidden {
+				h.recordSignedRoomJoinFailure(joinScope)
+				if h.isSignedRoomJoinBlocked(joinScope) {
+					writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: "too many failed entry code attempts; retry later"})
+					return
+				}
 			}
+
+			// Log internal DB errors to terminal
+			if appErr.Internal != nil {
+				log.Printf("[ERROR] joinSignedRoom: %v", appErr.Internal)
+			}
+
+			// Return the error response
+			writeJSON(w, appErr.StatusCode, errorEnvelope{Error: appErr.Message})
+			return
 		}
+
+		// Fallback for unexpected standard errors
 		h.writeSignedRoomError(w, err)
 		return
 	}
+
+	// Reset failed attempts
 	h.resetSignedRoomJoinFailures(joinScope)
-	if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomName, authUser.ID); err != nil {
-		log.Printf("Could not record joined signed room user=%d room=%s: %v", authUser.ID, roomName, err)
+	if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), room.ID, authUser.ID); err != nil {
+		log.Printf("Could not record joined signed room user=%s room=%s: %v", authUser.ID, room.ID, err)
 	}
 
 	writeJSON(w, http.StatusOK, signedRoomEnvelopeFromModel(room, true, true))
@@ -273,9 +317,9 @@ func (h *Handler) handleRoomHistory(w http.ResponseWriter, r *http.Request) {
 	for _, item := range history {
 		envelope := roomHistoryEnvelopeFromModel(item)
 		switch item.Role {
-		case "owned":
+		case "owner":
 			response.Owned = append(response.Owned, envelope)
-		case "joined":
+		case "member":
 			response.Joined = append(response.Joined, envelope)
 		}
 	}
@@ -294,17 +338,43 @@ func (h *Handler) handleDeleteSignedRoom(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	roomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
-	if err := h.chatService.HandleDeleteSignedRoom(r.Context(), roomName, authUser.ID); err != nil {
-		if errors.Is(err, chat.ErrRoomOwnedByAnotherUser) {
-			writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
-			return
-		}
+	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	if roomID == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room_id is required"})
+		return
+	}
+
+	if err := h.chatService.HandleDeleteSignedRoom(r.Context(), roomID, authUser.ID); err != nil {
 		h.writeSignedRoomError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	writeJSON(w, http.StatusOK, map[string]bool{"expired": true})
+}
+
+func (h *Handler) handlePurgeSignedRoom(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authUser, ok := h.requireAuthenticatedUser(w, r)
+	if !ok {
+		return
+	}
+
+	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	if roomID == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room_id is required"})
+		return
+	}
+
+	if err := h.chatService.HandlePurgeSignedRoom(r.Context(), roomID, authUser.ID); err != nil {
+		h.writeSignedRoomError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"purged": true})
 }
 
 func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request) {
@@ -316,8 +386,18 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 	// This endpoint is used by chat clients (including guests) to resolve
 	// whether a room has signed-room TTL metadata. Keep it unauthenticated.
 
-	roomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
-	room, exists, err := h.chatService.HandleGetSignedRoomStatus(r.Context(), roomName)
+	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
+	unsignedRoomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+	if roomID != "" && unsignedRoomName != "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "ambiguous room parameters; specify only room_id"})
+		return
+	}
+	if unsignedRoomName != "" && roomID == "" {
+		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: "room status is only available for signed rooms by room_id"})
+		return
+	}
+
+	room, exists, err := h.chatService.HandleGetSignedRoomStatus(r.Context(), roomID)
 	if err != nil {
 		h.writeSignedRoomError(w, err)
 		return
@@ -335,6 +415,15 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
+	var appErr *util.AppError
+	if errors.As(err, &appErr) {
+		if appErr.Internal != nil {
+			log.Printf("[ERROR] signed room error: kind=internal message=%q", appErr.Message)
+		}
+		writeJSON(w, appErr.StatusCode, errorEnvelope{Error: appErr.Message})
+		return
+	}
+
 	switch {
 	case errors.Is(err, chat.ErrSignedRoomUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
@@ -350,6 +439,8 @@ func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrRoomOwnedByAnotherUser):
 		writeJSON(w, http.StatusConflict, errorEnvelope{Error: err.Error()})
+	case errors.Is(err, chat.ErrRoomEntryCodeUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: "signed room operation failed"})
 	}
@@ -404,8 +495,9 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 	}
 
 	out := signedRoomEnvelope{
+		RoomID:           room.ID,
 		RoomName:         room.RoomName,
-		OwnerDisplayName: room.OwnerDisplayName,
+		OwnerUsername:    room.OwnerUsername,
 		ExpiresAt:        room.ExpiresAt.UTC().Format(time.RFC3339),
 		ExpiresInSeconds: expiresIn,
 	}
@@ -415,7 +507,7 @@ func signedRoomEnvelopeFromModel(room model.SignedRoom, includeChatURL, includeE
 
 	if includeChatURL {
 		query := url.Values{}
-		query.Set("room", room.RoomName)
+		query.Set("room_id", room.ID)
 		query.Set("expires_at", room.ExpiresAt.UTC().Format(time.RFC3339))
 		out.ChatURL = "/chat?" + query.Encode()
 	}
@@ -435,9 +527,10 @@ func roomHistoryEnvelopeFromModel(item model.RoomHistory) roomHistoryItemEnvelop
 	}
 
 	out := roomHistoryItemEnvelope{
+		RoomID:           item.RoomID,
 		RoomName:         item.RoomName,
 		Role:             item.Role,
-		OwnerDisplayName: item.OwnerDisplayName,
+		OwnerUsername:    item.OwnerUsername,
 		ExpiresAt:        expiresAt,
 		ExpiresInSeconds: expiresIn,
 		LastVisitedAt:    item.LastVisitedAt.UTC().Format(time.RFC3339),
@@ -447,7 +540,7 @@ func roomHistoryEnvelopeFromModel(item model.RoomHistory) roomHistoryItemEnvelop
 	if item.Active {
 		out.EntryCode = item.EntryCode
 		query := url.Values{}
-		query.Set("room", item.RoomName)
+		query.Set("room_id", item.RoomID)
 		if expiresAt != "" {
 			query.Set("expires_at", expiresAt)
 		}

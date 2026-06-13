@@ -6,11 +6,17 @@ import (
 	"errors"
 	"time"
 
-	"github.com/lib/pq"
 	"real_time_chat_app/internal/model"
+
+	"github.com/lib/pq"
+	"github.com/oklog/ulid/v2"
 )
 
-var ErrDuplicateEmail = errors.New("duplicate email")
+var (
+	ErrDuplicateEmail    = errors.New("duplicate email")
+	ErrDuplicateUsername = errors.New("duplicate username")
+	ErrUserNotFound      = errors.New("user not found")
+)
 
 type AuthStore struct {
 	db *sql.DB
@@ -23,9 +29,9 @@ func NewAuthStore(db *sql.DB) *AuthStore {
 func (s *AuthStore) EnsureSchema(ctx context.Context) error {
 	userTable := `
 	CREATE TABLE IF NOT EXISTS users (
-		id SERIAL PRIMARY KEY,
+		id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
 		email VARCHAR(255) UNIQUE NOT NULL,
-		display_name VARCHAR(64) NOT NULL,
+		username VARCHAR(64) UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -34,8 +40,8 @@ func (s *AuthStore) EnsureSchema(ctx context.Context) error {
 
 	sessionTable := `
 	CREATE TABLE IF NOT EXISTS user_sessions (
-		id SERIAL PRIMARY KEY,
-		user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		token_hash CHAR(64) UNIQUE NOT NULL,
 		expires_at TIMESTAMPTZ NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -44,6 +50,7 @@ func (s *AuthStore) EnsureSchema(ctx context.Context) error {
 
 	sessionIndexes := `
 	CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+	CREATE INDEX IF NOT EXISTS idx_user_sessions_token_hash ON user_sessions(token_hash);
 	CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
 	`
 
@@ -60,18 +67,22 @@ func (s *AuthStore) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *AuthStore) CreateUser(ctx context.Context, email, displayName, passwordHash string) (model.User, error) {
+func (s *AuthStore) CreateUser(ctx context.Context, email, username, passwordHash string) (model.User, error) {
 	var user model.User
+	userID := ulid.Make().String()
 	query := `
-		INSERT INTO users (email, display_name, password_hash)
-		VALUES ($1, $2, $3)
-		RETURNING id, email, display_name, created_at
+		INSERT INTO users (id, email, username, password_hash)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, email, username, created_at, updated_at
 	`
-	err := s.db.QueryRowContext(ctx, query, email, displayName, passwordHash).
-		Scan(&user.ID, &user.Email, &user.DisplayName, &user.CreatedAt)
+	err := s.db.QueryRowContext(ctx, query, userID, email, username, passwordHash).
+		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			if pqErr.Constraint == "users_username_key" {
+				return model.User{}, ErrDuplicateUsername
+			}
 			return model.User{}, ErrDuplicateEmail
 		}
 		return model.User{}, err
@@ -84,12 +95,12 @@ func (s *AuthStore) GetUserCredentialsByEmail(ctx context.Context, email string)
 	var passwordHash string
 
 	query := `
-		SELECT id, email, display_name, password_hash, created_at
+		SELECT id, email, username, password_hash, created_at, updated_at
 		FROM users
 		WHERE email = $1
 	`
 	err := s.db.QueryRowContext(ctx, query, email).
-		Scan(&user.ID, &user.Email, &user.DisplayName, &passwordHash, &user.CreatedAt)
+		Scan(&user.ID, &user.Email, &user.Username, &passwordHash, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return model.User{}, "", err
 	}
@@ -97,44 +108,52 @@ func (s *AuthStore) GetUserCredentialsByEmail(ctx context.Context, email string)
 	return user, passwordHash, nil
 }
 
-func (s *AuthStore) CreateSession(ctx context.Context, userID int64, tokenHash string, expiresAt time.Time) error {
+func (s *AuthStore) CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error {
+	sessionID := ulid.Make().String()
 	query := `
-		INSERT INTO user_sessions (user_id, token_hash, expires_at)
-		VALUES ($1, $2, $3)
+		INSERT INTO user_sessions (id, user_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4)
 	`
-	_, err := s.db.ExecContext(ctx, query, userID, tokenHash, expiresAt)
+	_, err := s.db.ExecContext(ctx, query, sessionID, userID, tokenHash, expiresAt)
 	return err
 }
 
 func (s *AuthStore) GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error) {
 	var user model.User
 	query := `
-		SELECT u.id, u.email, u.display_name, u.created_at
+		SELECT u.id, u.email, u.username, u.created_at, u.updated_at
 		FROM user_sessions s
 		INNER JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.expires_at > NOW()
 	`
 
 	err := s.db.QueryRowContext(ctx, query, tokenHash).
-		Scan(&user.ID, &user.Email, &user.DisplayName, &user.CreatedAt)
+		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return model.User{}, err
 	}
 	return user, nil
 }
 
-func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID int64, displayName string) (model.User, error) {
+func (s *AuthStore) UpdateUsername(ctx context.Context, userID string, username string) (model.User, error) {
 	var user model.User
 	query := `
 		UPDATE users
-		SET display_name = $1, updated_at = NOW()
+		SET username = $1, updated_at = NOW()
 		WHERE id = $2
-		RETURNING id, email, display_name, created_at
+		RETURNING id, email, username, created_at, updated_at
 	`
 
-	err := s.db.QueryRowContext(ctx, query, displayName, userID).
-		Scan(&user.ID, &user.Email, &user.DisplayName, &user.CreatedAt)
+	err := s.db.QueryRowContext(ctx, query, username, userID).
+		Scan(&user.ID, &user.Email, &user.Username, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.User{}, ErrUserNotFound
+		}
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "users_username_key" {
+			return model.User{}, ErrDuplicateUsername
+		}
 		return model.User{}, err
 	}
 	return user, nil
