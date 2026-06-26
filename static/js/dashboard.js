@@ -94,6 +94,9 @@ function renderRoomHistorySlide(index, rooms) {
   rooms.forEach((room) => {
     const row = document.createElement("div");
     row.className = "owned-room-item";
+    if (index === 1) {
+      row.classList.add("joined-room-item");
+    }
     if (!room.active) {
       row.classList.add("inactive-room-item");
     }
@@ -111,12 +114,9 @@ function renderRoomHistorySlide(index, rooms) {
     const lastSeen = document.createElement("span");
     lastSeen.textContent = `latest ${formatLastVisited(room.last_visited_at)}`;
 
-    const roomID = document.createElement("span");
-    roomID.textContent = `ID ${room.room_id}`;
-
     const meta = document.createElement("div");
     meta.className = "owned-room-meta";
-    meta.append(roomID, code, expiry, lastSeen);
+    meta.append(code, expiry, lastSeen);
 
     const actions = document.createElement("div");
     actions.className = "owned-room-actions";
