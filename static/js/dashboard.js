@@ -94,6 +94,9 @@ function renderRoomHistorySlide(index, rooms) {
   rooms.forEach((room) => {
     const row = document.createElement("div");
     row.className = "owned-room-item";
+    if (index === 1) {
+      row.classList.add("joined-room-item");
+    }
     if (!room.active) {
       row.classList.add("inactive-room-item");
     }
