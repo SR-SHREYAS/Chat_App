@@ -46,6 +46,8 @@ const slides = [
   },
 ];
 
+let dashboardRefreshInFlight = null;
+
 function setMessage(text, isError = false) {
   dashboardMessage.textContent = text || "";
   dashboardMessage.classList.toggle("error", Boolean(isError && text));
@@ -286,6 +288,25 @@ async function loadRoomHistory() {
     const msg = err instanceof Error ? err.message : String(err || "Could not load room history");
     setMessage(msg || "Could not load room history", true);
   }
+}
+
+async function refreshDashboardData() {
+  if (dashboardRefreshInFlight) {
+    return dashboardRefreshInFlight;
+  }
+
+  dashboardRefreshInFlight = (async () => {
+    renderSlide();
+    await loadRoomConfig();
+    const authenticated = await loadSession();
+    if (authenticated) {
+      await loadRoomHistory();
+    }
+  })().finally(() => {
+    dashboardRefreshInFlight = null;
+  });
+
+  return dashboardRefreshInFlight;
 }
 
 function normalizeRoomInput() {
@@ -695,10 +716,16 @@ historyNextBtn.addEventListener("click", () => {
   renderSlide();
 });
 
-renderSlide();
-loadRoomConfig();
-loadSession().then((ok) => {
-  if (ok) {
-    loadRoomHistory();
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    refreshDashboardData();
   }
 });
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshDashboardData();
+  }
+});
+
+refreshDashboardData();
