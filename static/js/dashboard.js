@@ -46,6 +46,8 @@ const slides = [
   },
 ];
 
+let dashboardRefreshInFlight = null;
+
 function setMessage(text, isError = false) {
   dashboardMessage.textContent = text || "";
   dashboardMessage.classList.toggle("error", Boolean(isError && text));
@@ -94,6 +96,9 @@ function renderRoomHistorySlide(index, rooms) {
   rooms.forEach((room) => {
     const row = document.createElement("div");
     row.className = "owned-room-item";
+    if (index === 1) {
+      row.classList.add("joined-room-item");
+    }
     if (!room.active) {
       row.classList.add("inactive-room-item");
     }
@@ -111,12 +116,9 @@ function renderRoomHistorySlide(index, rooms) {
     const lastSeen = document.createElement("span");
     lastSeen.textContent = `latest ${formatLastVisited(room.last_visited_at)}`;
 
-    const roomID = document.createElement("span");
-    roomID.textContent = `ID ${room.room_id}`;
-
     const meta = document.createElement("div");
     meta.className = "owned-room-meta";
-    meta.append(roomID, code, expiry, lastSeen);
+    meta.append(code, expiry, lastSeen);
 
     const actions = document.createElement("div");
     actions.className = "owned-room-actions";
@@ -286,6 +288,25 @@ async function loadRoomHistory() {
     const msg = err instanceof Error ? err.message : String(err || "Could not load room history");
     setMessage(msg || "Could not load room history", true);
   }
+}
+
+async function refreshDashboardData() {
+  if (dashboardRefreshInFlight) {
+    return dashboardRefreshInFlight;
+  }
+
+  dashboardRefreshInFlight = (async () => {
+    renderSlide();
+    await loadRoomConfig();
+    const authenticated = await loadSession();
+    if (authenticated) {
+      await loadRoomHistory();
+    }
+  })().finally(() => {
+    dashboardRefreshInFlight = null;
+  });
+
+  return dashboardRefreshInFlight;
 }
 
 function normalizeRoomInput() {
@@ -695,10 +716,16 @@ historyNextBtn.addEventListener("click", () => {
   renderSlide();
 });
 
-renderSlide();
-loadRoomConfig();
-loadSession().then((ok) => {
-  if (ok) {
-    loadRoomHistory();
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    refreshDashboardData();
   }
 });
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshDashboardData();
+  }
+});
+
+refreshDashboardData();
