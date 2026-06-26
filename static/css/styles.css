@@ -152,7 +152,7 @@ body {
 
 .user-label {
   font-size: 12px;
-  color: var(--text-muted);
+  color: #000000;
 }
 
 .user-name-row {
@@ -164,6 +164,7 @@ body {
 .display-name {
   font-size: 20px;
   font-weight: 800;
+  color: #000000;
 }
 
 .inline-btn {

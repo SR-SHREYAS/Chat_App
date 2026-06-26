@@ -114,12 +114,9 @@ function renderRoomHistorySlide(index, rooms) {
     const lastSeen = document.createElement("span");
     lastSeen.textContent = `latest ${formatLastVisited(room.last_visited_at)}`;
 
-    const roomID = document.createElement("span");
-    roomID.textContent = `ID ${room.room_id}`;
-
     const meta = document.createElement("div");
     meta.className = "owned-room-meta";
-    meta.append(roomID, code, expiry, lastSeen);
+    meta.append(code, expiry, lastSeen);
 
     const actions = document.createElement("div");
     actions.className = "owned-room-actions";
