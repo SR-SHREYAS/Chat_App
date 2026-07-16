@@ -47,8 +47,15 @@ func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 }
 
 func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
+	// Transport Validation
+	// The WebSocket upgrader validates the transport transition below. Keep that
+	// validation at its existing point so HTTP and WebSocket error behavior remain unchanged.
+
+	// Request Parsing
 	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
 	unsignedRoomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+
+	// Request Validation
 	if roomID != "" && unsignedRoomName != "" {
 		http.Error(w, "Ambiguous room parameters: specify only one of room_id or room", http.StatusBadRequest)
 		return
@@ -63,6 +70,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Authentication
 	var (
 		authUser auth.AuthUser
 		isAuth   bool
@@ -77,6 +85,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Signed Room Workflow
 	var signedRoom model.SignedRoom
 	hasSignedRoom := false
 	var err error
@@ -110,6 +119,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	joinScope := h.newSignedRoomJoinScope(r, roomKey, authUser)
 
+	// Session Context
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
 	if userID == "" {
 		userID = randomGuestID()
@@ -120,12 +130,14 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		userName = authUser.Username
 	}
 
+	// WebSocket Upgrade
 	socket, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
 		return
 	}
 
+	// Signed Room Handshake
 	if hasSignedRoom {
 		if h.isSignedRoomJoinBlocked(joinScope) {
 			closeWithPolicyViolation(socket, "too many failed entry code attempts")
@@ -154,6 +166,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		h.resetSignedRoomJoinFailures(joinScope)
 	}
 
+	// Session Startup
 	if isAuth {
 		userID = authUser.ID
 	}
