@@ -1,4 +1,4 @@
-package store
+package repository
 
 import (
 	"context"
@@ -7,19 +7,20 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/storage/postgres"
 
 	"github.com/oklog/ulid/v2"
 )
 
-type SignedRoomStore struct {
-	db *sql.DB
+type SignedRoomRepository struct {
+	db postgres.Client
 }
 
-func NewSignedRoomStore(db *sql.DB) *SignedRoomStore {
-	return &SignedRoomStore{db: db}
+func NewSignedRoomRepository(db postgres.Client) *SignedRoomRepository {
+	return &SignedRoomRepository{db: db}
 }
 
-func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
+func (s *SignedRoomRepository) EnsureSchema(ctx context.Context) (err error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin signed_rooms schema transaction: %w", err)
@@ -98,7 +99,7 @@ func (s *SignedRoomStore) EnsureSchema(ctx context.Context) (err error) {
 	return nil
 }
 
-func (s *SignedRoomStore) CreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
+func (s *SignedRoomRepository) CreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	roomID := ulid.Make().String()
 	query := `
@@ -114,7 +115,7 @@ func (s *SignedRoomStore) CreateSignedRoom(ctx context.Context, roomName string,
 	return room, nil
 }
 
-func (s *SignedRoomStore) GetSignedRoomByID(ctx context.Context, roomID string) (model.SignedRoom, error) {
+func (s *SignedRoomRepository) GetSignedRoomByID(ctx context.Context, roomID string) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	query := `
 		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
@@ -130,7 +131,7 @@ func (s *SignedRoomStore) GetSignedRoomByID(ctx context.Context, roomID string) 
 	return room, nil
 }
 
-func (s *SignedRoomStore) GetSignedRoomByNameAndCode(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+func (s *SignedRoomRepository) GetSignedRoomByNameAndCode(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	query := `
 		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
@@ -146,7 +147,7 @@ func (s *SignedRoomStore) GetSignedRoomByNameAndCode(ctx context.Context, roomNa
 	return room, nil
 }
 
-func (s *SignedRoomStore) UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
+func (s *SignedRoomRepository) UpdateSignedRoomExpiry(ctx context.Context, roomID string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error) {
 	var room model.SignedRoom
 	query := `
 		UPDATE signed_rooms
@@ -162,7 +163,7 @@ func (s *SignedRoomStore) UpdateSignedRoomExpiry(ctx context.Context, roomID str
 	return room, nil
 }
 
-func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error) {
+func (s *SignedRoomRepository) ListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error) {
 	query := `
 		SELECT sr.id, sr.room_name, sr.owner_user_id, u.username, sr.entry_code, sr.expires_at, sr.created_at, sr.updated_at
 		FROM signed_rooms sr
@@ -190,13 +191,13 @@ func (s *SignedRoomStore) ListOwnedSignedRooms(ctx context.Context, ownerUserID 
 	return rooms, nil
 }
 
-func (s *SignedRoomStore) DeleteSignedRoomByID(ctx context.Context, roomID string) error {
+func (s *SignedRoomRepository) DeleteSignedRoomByID(ctx context.Context, roomID string) error {
 	query := `DELETE FROM signed_rooms WHERE id = $1`
 	_, err := s.db.ExecContext(ctx, query, roomID)
 	return err
 }
 
-func (s *SignedRoomStore) ExpireSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
+func (s *SignedRoomRepository) ExpireSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
 	query := `
 		UPDATE signed_rooms
 		SET expires_at = NOW(), updated_at = NOW()
@@ -216,7 +217,7 @@ func (s *SignedRoomStore) ExpireSignedRoom(ctx context.Context, roomID string, o
 	return nil
 }
 
-func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
+func (s *SignedRoomRepository) DeleteExpiredSignedRooms(ctx context.Context, now time.Time) ([]string, error) {
 	const batchSize = 1000
 
 	var roomIDs []string
@@ -264,7 +265,7 @@ func (s *SignedRoomStore) DeleteExpiredSignedRooms(ctx context.Context, now time
 	}
 }
 
-func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error {
+func (s *SignedRoomRepository) RecordRoomMembership(ctx context.Context, userID string, roomID string, role string) error {
 	query := `
 		INSERT INTO room_memberships (room_id, user_id, role, joined_at, last_visited_at)
 		VALUES ($1, $2, $3, NOW(), NOW())
@@ -277,7 +278,7 @@ func (s *SignedRoomStore) RecordRoomMembership(ctx context.Context, userID strin
 	return nil
 }
 
-func (s *SignedRoomStore) GetRoomMembership(ctx context.Context, userID string, roomID string) (model.RoomHistory, error) {
+func (s *SignedRoomRepository) GetRoomMembership(ctx context.Context, userID string, roomID string) (model.RoomHistory, error) {
 	var item model.RoomHistory
 	query := `
 		SELECT room_id, role, joined_at, COALESCE(last_visited_at, joined_at)
@@ -292,7 +293,7 @@ func (s *SignedRoomStore) GetRoomMembership(ctx context.Context, userID string, 
 	return item, nil
 }
 
-func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID string, limit int) error {
+func (s *SignedRoomRepository) PruneRoomMemberships(ctx context.Context, userID string, limit int) error {
 	if limit < 1 {
 		limit = 1
 	}
@@ -316,7 +317,7 @@ func (s *SignedRoomStore) PruneRoomMemberships(ctx context.Context, userID strin
 	return err
 }
 
-func (s *SignedRoomStore) ListRoomMemberships(ctx context.Context, userID string, limit int) ([]model.RoomHistory, error) {
+func (s *SignedRoomRepository) ListRoomMemberships(ctx context.Context, userID string, limit int) ([]model.RoomHistory, error) {
 	if limit < 1 {
 		limit = 1
 	}

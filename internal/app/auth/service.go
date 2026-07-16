@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/model"
-	"real_time_chat_app/internal/store"
+	"real_time_chat_app/internal/repository"
 )
 
 const (
@@ -34,7 +34,7 @@ var (
 	ErrUserNotFound          = errors.New("user not found")
 )
 
-type AuthStore interface {
+type AuthRepository interface {
 	CreateUser(ctx context.Context, email, username, passwordHash string) (model.User, error)
 	GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error)
 	CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error
@@ -67,11 +67,11 @@ type AuthResult struct {
 }
 
 type Service struct {
-	store AuthStore
+	repository AuthRepository
 }
 
-func NewService(store AuthStore) *Service {
-	return &Service{store: store}
+func NewService(repository AuthRepository) *Service {
+	return &Service{repository: repository}
 }
 
 func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResult, error) {
@@ -95,12 +95,12 @@ func (s *Service) HandleSignUp(ctx context.Context, input SignUpInput) (AuthResu
 		return AuthResult{}, err
 	}
 
-	user, err := s.store.CreateUser(ctx, email, username, passwordHash)
+	user, err := s.repository.CreateUser(ctx, email, username, passwordHash)
 	if err != nil {
-		if errors.Is(err, store.ErrDuplicateEmail) {
+		if errors.Is(err, repository.ErrDuplicateEmail) {
 			return AuthResult{}, ErrEmailAlreadyExists
 		}
-		if errors.Is(err, store.ErrDuplicateUsername) {
+		if errors.Is(err, repository.ErrDuplicateUsername) {
 			return AuthResult{}, ErrUsernameAlreadyExists
 		}
 		return AuthResult{}, err
@@ -115,7 +115,7 @@ func (s *Service) HandleSignIn(ctx context.Context, input SignInInput) (AuthResu
 		return AuthResult{}, ErrInvalidCredentials
 	}
 
-	user, storedHash, err := s.store.GetUserCredentialsByEmail(ctx, email)
+	user, storedHash, err := s.repository.GetUserCredentialsByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return AuthResult{}, ErrInvalidCredentials
@@ -140,7 +140,7 @@ func (s *Service) HandleMe(ctx context.Context, sessionToken string) (AuthUser, 
 		return AuthUser{}, false, nil
 	}
 
-	user, err := s.store.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
+	user, err := s.repository.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return AuthUser{}, false, nil
@@ -156,7 +156,7 @@ func (s *Service) HandleSignOut(ctx context.Context, sessionToken string) error 
 	if sessionToken == "" {
 		return nil
 	}
-	return s.store.DeleteSession(ctx, hashSessionToken(sessionToken))
+	return s.repository.DeleteSession(ctx, hashSessionToken(sessionToken))
 }
 
 func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, username string) (AuthUser, error) {
@@ -170,7 +170,7 @@ func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, userna
 		return AuthUser{}, ErrInvalidUsername
 	}
 
-	user, err := s.store.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
+	user, err := s.repository.GetUserBySessionHash(ctx, hashSessionToken(sessionToken))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return AuthUser{}, ErrInvalidCredentials
@@ -178,12 +178,12 @@ func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, userna
 		return AuthUser{}, err
 	}
 
-	updatedUser, err := s.store.UpdateUsername(ctx, user.ID, username)
+	updatedUser, err := s.repository.UpdateUsername(ctx, user.ID, username)
 	if err != nil {
-		if errors.Is(err, store.ErrDuplicateUsername) {
+		if errors.Is(err, repository.ErrDuplicateUsername) {
 			return AuthUser{}, ErrUsernameAlreadyExists
 		}
-		if errors.Is(err, store.ErrUserNotFound) {
+		if errors.Is(err, repository.ErrUserNotFound) {
 			return AuthUser{}, fmt.Errorf("user not found for valid session: %w", ErrUserNotFound)
 		}
 		return AuthUser{}, err
@@ -193,7 +193,7 @@ func (s *Service) HandleUpdateUsername(ctx context.Context, sessionToken, userna
 }
 
 func (s *Service) createSessionForUser(ctx context.Context, user model.User) (AuthResult, error) {
-	if err := s.store.DeleteExpiredSessions(ctx); err != nil {
+	if err := s.repository.DeleteExpiredSessions(ctx); err != nil {
 		return AuthResult{}, err
 	}
 
@@ -202,7 +202,7 @@ func (s *Service) createSessionForUser(ctx context.Context, user model.User) (Au
 		return AuthResult{}, err
 	}
 
-	if err := s.store.CreateSession(ctx, user.ID, tokenHash, time.Now().Add(SessionTTL)); err != nil {
+	if err := s.repository.CreateSession(ctx, user.ID, tokenHash, time.Now().Add(SessionTTL)); err != nil {
 		return AuthResult{}, err
 	}
 

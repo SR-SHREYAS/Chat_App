@@ -15,7 +15,8 @@ import (
 	"real_time_chat_app/internal/api"
 	authapp "real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
-	"real_time_chat_app/internal/store"
+	"real_time_chat_app/internal/repository"
+	"real_time_chat_app/internal/storage/postgres"
 
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
@@ -68,23 +69,24 @@ func TestMaxMessageLengthOversizedMessageEmitsErrorAndIsNotPersisted(t *testing.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	authStore := store.NewAuthStore(db)
+	database := postgres.New(db)
+
+	authStore := repository.NewAuthRepository(database.Client())
 	if err := authStore.EnsureSchema(ctx); err != nil {
 		t.Fatalf("EnsureSchema(auth): %v", err)
 	}
 
-	signedRoomStore := store.NewSignedRoomStore(db)
+	signedRoomStore := repository.NewSignedRoomRepository(database.Client())
 	if err := signedRoomStore.EnsureSchema(ctx); err != nil {
 		t.Fatalf("EnsureSchema(signed_rooms): %v", err)
 	}
 
-	messageStore := store.NewMessageStore(db)
+	messageStore := repository.NewMessageRepository(database.Client())
 	if err := messageStore.EnsureSchema(ctx); err != nil {
 		t.Fatalf("EnsureSchema(messages): %v", err)
 	}
 
-	chatService := chat.NewService(messageStore)
-	chatService.BindSignedRoomStore(signedRoomStore)
+	chatService := chat.NewService(messageStore, signedRoomStore)
 	authService := authapp.NewService(authStore)
 	handler := api.NewHandler(chatService, authService)
 
@@ -142,7 +144,7 @@ func TestMaxMessageLengthOversizedMessageEmitsErrorAndIsNotPersisted(t *testing.
 	}
 
 	// Finally, assert the oversized message was NOT persisted.
-	assertNoMessageWithContent(t, messageStore, ctx, oversized)
+	assertNoMessageWithContent(t, db, ctx, oversized)
 }
 
 func createSignedRoomForTest(t *testing.T, srv *httptest.Server) (roomID, chatURL string) {
@@ -238,12 +240,10 @@ func makeWebSocketURL(t *testing.T, srv *httptest.Server, pathAndQuery string) s
 	return u + pathAndQuery
 }
 
-func assertNoMessageWithContent(t *testing.T, messageStore *store.MessageStore, ctx context.Context, content string) {
+func assertNoMessageWithContent(t *testing.T, db *sql.DB, ctx context.Context, content string) {
 	t.Helper()
 
-	// This assumes MessageStore exposes a method to query messages.
-	// If not, you can query the DB directly via messageStore.DB or a dedicated helper.
-	rows, err := messageStore.DB().QueryContext(ctx, `SELECT message FROM messages WHERE message = $1`, content)
+	rows, err := db.QueryContext(ctx, `SELECT message FROM messages WHERE message = $1`, content)
 	if err != nil {
 		t.Fatalf("query messages: %v", err)
 	}

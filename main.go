@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -12,7 +11,8 @@ import (
 	authapp "real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
 	"real_time_chat_app/internal/middleware"
-	"real_time_chat_app/internal/store"
+	"real_time_chat_app/internal/repository"
+	"real_time_chat_app/internal/storage/postgres"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -28,21 +28,17 @@ func main() {
 		log.Fatal("DATABASE_URL environment variable is not set")
 	}
 
-	db, err := sql.Open("postgres", databaseURL)
+	database, err := postgres.Open(databaseURL)
 	if err != nil {
 		log.Fatalf("Could not connect to database: %v", err)
 	}
-	defer db.Close()
-
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	defer database.Close()
 
 	authCtx, cancelAuth := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelAuth()
 
-	authStore := store.NewAuthStore(db)
-	if err := authStore.EnsureSchema(authCtx); err != nil {
+	authRepository := repository.NewAuthRepository(database.Client())
+	if err := authRepository.EnsureSchema(authCtx); err != nil {
 		log.Fatalf("Could not create auth tables: %v", err)
 	}
 	log.Println("Auth tables created or already exist.")
@@ -50,8 +46,8 @@ func main() {
 	roomsCtx, cancelRooms := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelRooms()
 
-	signedRoomStore := store.NewSignedRoomStore(db)
-	if err := signedRoomStore.EnsureSchema(roomsCtx); err != nil {
+	signedRoomRepository := repository.NewSignedRoomRepository(database.Client())
+	if err := signedRoomRepository.EnsureSchema(roomsCtx); err != nil {
 		log.Fatalf("Could not create signed room tables: %v", err)
 	}
 	log.Println("Signed room tables created or already exist.")
@@ -59,15 +55,14 @@ func main() {
 	schemaCtx, cancelSchema := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelSchema()
 
-	messageStore := store.NewMessageStore(db)
-	if err := messageStore.EnsureSchema(schemaCtx); err != nil {
+	messageRepository := repository.NewMessageRepository(database.Client())
+	if err := messageRepository.EnsureSchema(schemaCtx); err != nil {
 		log.Fatalf("Could not create messages table: %v", err)
 	}
 	log.Println("Messages table created or already exists.")
 
-	service := chat.NewService(messageStore)
-	service.BindSignedRoomStore(signedRoomStore)
-	authService := authapp.NewService(authStore)
+	service := chat.NewService(messageRepository, signedRoomRepository)
+	authService := authapp.NewService(authRepository)
 	handler := api.NewHandler(service, authService)
 
 	mux := http.NewServeMux()

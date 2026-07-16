@@ -1,28 +1,23 @@
-package store
+package repository
 
 import (
 	"context"
-	"database/sql"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/storage/postgres"
 
 	"github.com/oklog/ulid/v2"
 )
 
-type MessageStore struct {
-	db *sql.DB
+type MessageRepository struct {
+	db postgres.Client
 }
 
-// DB exposes the underlying *sql.DB for integration tests and tooling.
-func (s *MessageStore) DB() *sql.DB {
-	return s.db
+func NewMessageRepository(db postgres.Client) *MessageRepository {
+	return &MessageRepository{db: db}
 }
 
-func NewMessageStore(db *sql.DB) *MessageStore {
-	return &MessageStore{db: db}
-}
-
-func (s *MessageStore) EnsureSchema(ctx context.Context) error {
+func (s *MessageRepository) EnsureSchema(ctx context.Context) error {
 	exec := `
 	CREATE TABLE IF NOT EXISTS messages (
 		id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
@@ -38,7 +33,7 @@ func (s *MessageStore) EnsureSchema(ctx context.Context) error {
 	return err
 }
 
-func (s *MessageStore) SaveMessage(ctx context.Context, roomID, senderUserID, message string) error {
+func (s *MessageRepository) SaveMessage(ctx context.Context, roomID, senderUserID, message string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO messages (id, room_id, sender_user_id, message)
 		VALUES ($1, $2, $3, $4)
@@ -46,7 +41,7 @@ func (s *MessageStore) SaveMessage(ctx context.Context, roomID, senderUserID, me
 	return err
 }
 
-func (s *MessageStore) GetRecentMessages(ctx context.Context, roomID string, limit int) ([]model.Message, error) {
+func (s *MessageRepository) GetRecentMessages(ctx context.Context, roomID string, limit int) ([]model.Message, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT messages.id, messages.room_id, messages.sender_user_id, users.username, messages.message, messages.created_at
 		FROM messages
@@ -79,7 +74,7 @@ func (s *MessageStore) GetRecentMessages(ctx context.Context, roomID string, lim
 	return messages, nil
 }
 
-func (s *MessageStore) DeleteRoomMessages(ctx context.Context, roomID string) error {
+func (s *MessageRepository) DeleteRoomMessages(ctx context.Context, roomID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM messages
 		WHERE room_id = $1
@@ -87,6 +82,6 @@ func (s *MessageStore) DeleteRoomMessages(ctx context.Context, roomID string) er
 	return err
 }
 
-func (s *MessageStore) Ping(ctx context.Context) error {
+func (s *MessageRepository) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }

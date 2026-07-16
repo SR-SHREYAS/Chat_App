@@ -142,7 +142,7 @@ func TestUnsignedRoomDoesNotReplayRecentMessagesIntegration(t *testing.T) {
 func startTestServer(t *testing.T, messageStore *integrationMessageStore) *httptest.Server {
 	t.Helper()
 
-	chatService := chat.NewService(messageStore)
+	chatService := chat.NewService(messageStore, nil)
 	handler := NewHandler(chatService, nil)
 
 	mux := http.NewServeMux()

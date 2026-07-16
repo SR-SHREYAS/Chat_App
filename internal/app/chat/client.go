@@ -33,7 +33,7 @@ type Client struct {
 	userID string
 	name   string
 
-	messages MessageStore
+	messages MessageRepository
 	persist  bool
 
 	writeMu   sync.Mutex

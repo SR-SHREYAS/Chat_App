@@ -72,7 +72,7 @@ func TestHandleRoom_ReplaysHistoryOnlyWhenPersistenceEnabled(t *testing.T) {
 			{Username: "owner", Message: "hello signed room"},
 		},
 	}
-	service := NewService(store)
+	service := NewService(store, nil)
 
 	_, signedClient := service.HandleRoom(context.Background(), nil, "alpha", "u1", "owner", true)
 
@@ -115,8 +115,7 @@ func TestHandleDeleteSignedRoom_ReliesOnCascadeForStoredMessages(t *testing.T) {
 		ExpiresAt:   time.Now().UTC().Add(5 * time.Minute),
 	}
 
-	service := NewService(messageStore)
-	service.BindSignedRoomStore(roomStore)
+	service := NewService(messageStore, roomStore)
 
 	if err := service.HandleDeleteSignedRoom(context.Background(), "room-alpha", "1"); err != nil {
 		t.Fatalf("delete signed room: %v", err)
@@ -139,8 +138,7 @@ func TestHandleGetSignedRoomStatus_DeletesMessagesForExpiredRoom(t *testing.T) {
 		ExpiresAt:   time.Now().UTC().Add(-time.Minute),
 	}
 
-	service := NewService(messageStore)
-	service.BindSignedRoomStore(roomStore)
+	service := NewService(messageStore, roomStore)
 
 	_, exists, err := service.HandleGetSignedRoomStatus(context.Background(), "room-expired")
 	if err == nil {
@@ -167,8 +165,7 @@ func TestExpiredRoomCleanupWithoutIntervalDeletesMessages(t *testing.T) {
 		ExpiresAt:   time.Now().UTC().Add(-time.Minute),
 	}
 
-	service := NewService(messageStore)
-	service.BindSignedRoomStore(roomStore)
+	service := NewService(messageStore, roomStore)
 	service.signedRoomCleanupEvery = 0
 
 	if _, err := service.HandleListOwnedSignedRooms(context.Background(), "1"); err != nil {
