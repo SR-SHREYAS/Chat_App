@@ -1,4 +1,5 @@
-package store
+// Package repository contains persistence implementations for application services.
+package repository
 
 import (
 	"context"
@@ -7,6 +8,7 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/model"
+	"real_time_chat_app/internal/storage/postgres"
 
 	"github.com/lib/pq"
 	"github.com/oklog/ulid/v2"
@@ -18,15 +20,15 @@ var (
 	ErrUserNotFound      = errors.New("user not found")
 )
 
-type AuthStore struct {
-	db *sql.DB
+type AuthRepository struct {
+	db postgres.Client
 }
 
-func NewAuthStore(db *sql.DB) *AuthStore {
-	return &AuthStore{db: db}
+func NewAuthRepository(db postgres.Client) *AuthRepository {
+	return &AuthRepository{db: db}
 }
 
-func (s *AuthStore) EnsureSchema(ctx context.Context) error {
+func (s *AuthRepository) EnsureSchema(ctx context.Context) error {
 	userTable := `
 	CREATE TABLE IF NOT EXISTS users (
 		id TEXT PRIMARY KEY CHECK (char_length(id) = 26),
@@ -67,7 +69,7 @@ func (s *AuthStore) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *AuthStore) CreateUser(ctx context.Context, email, username, passwordHash string) (model.User, error) {
+func (s *AuthRepository) CreateUser(ctx context.Context, email, username, passwordHash string) (model.User, error) {
 	var user model.User
 	userID := ulid.Make().String()
 	query := `
@@ -90,7 +92,7 @@ func (s *AuthStore) CreateUser(ctx context.Context, email, username, passwordHas
 	return user, nil
 }
 
-func (s *AuthStore) GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error) {
+func (s *AuthRepository) GetUserCredentialsByEmail(ctx context.Context, email string) (model.User, string, error) {
 	var user model.User
 	var passwordHash string
 
@@ -108,7 +110,7 @@ func (s *AuthStore) GetUserCredentialsByEmail(ctx context.Context, email string)
 	return user, passwordHash, nil
 }
 
-func (s *AuthStore) CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error {
+func (s *AuthRepository) CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error {
 	sessionID := ulid.Make().String()
 	query := `
 		INSERT INTO user_sessions (id, user_id, token_hash, expires_at)
@@ -118,7 +120,7 @@ func (s *AuthStore) CreateSession(ctx context.Context, userID string, tokenHash 
 	return err
 }
 
-func (s *AuthStore) GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error) {
+func (s *AuthRepository) GetUserBySessionHash(ctx context.Context, tokenHash string) (model.User, error) {
 	var user model.User
 	query := `
 		SELECT u.id, u.email, u.username, u.created_at, u.updated_at
@@ -135,7 +137,7 @@ func (s *AuthStore) GetUserBySessionHash(ctx context.Context, tokenHash string) 
 	return user, nil
 }
 
-func (s *AuthStore) UpdateUsername(ctx context.Context, userID string, username string) (model.User, error) {
+func (s *AuthRepository) UpdateUsername(ctx context.Context, userID string, username string) (model.User, error) {
 	var user model.User
 	query := `
 		UPDATE users
@@ -159,13 +161,13 @@ func (s *AuthStore) UpdateUsername(ctx context.Context, userID string, username 
 	return user, nil
 }
 
-func (s *AuthStore) DeleteSession(ctx context.Context, tokenHash string) error {
+func (s *AuthRepository) DeleteSession(ctx context.Context, tokenHash string) error {
 	query := `DELETE FROM user_sessions WHERE token_hash = $1`
 	_, err := s.db.ExecContext(ctx, query, tokenHash)
 	return err
 }
 
-func (s *AuthStore) DeleteExpiredSessions(ctx context.Context) error {
+func (s *AuthRepository) DeleteExpiredSessions(ctx context.Context) error {
 	query := `DELETE FROM user_sessions WHERE expires_at <= NOW()`
 	_, err := s.db.ExecContext(ctx, query)
 	return err

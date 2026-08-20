@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"crypto/rand"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"real_time_chat_app/internal/model"
-	"real_time_chat_app/internal/util"
 
 	"github.com/gorilla/websocket"
 	"github.com/lib/pq"
@@ -28,7 +26,7 @@ const (
 	DefaultSignedRoomTTL  = 10 * time.Minute
 	MaxSignedRoomTTL      = 7 * 24 * time.Hour
 	MaxSignedRoomCapacity = 10 * 24 * time.Hour
-	SignedRoomCodeLength  = model.SignedRoomEntryCodeLength
+	SignedRoomCodeLength  = 4
 	signedRoomCleanupTTL  = 1 * time.Minute
 	roomHistoryLimit      = 15
 	entryCodeRetryLimit   = 25
@@ -37,27 +35,51 @@ const (
 )
 
 var (
-	ErrSignedRoomUnavailable      = errors.New("signed room service unavailable")
-	ErrInvalidRoomName            = errors.New("invalid room name")
-	ErrInvalidRoomOwner           = errors.New("invalid room owner")
-	ErrSignedRoomTTLTooLarge      = errors.New("signed room ttl exceeds maximum")
-	ErrSignedRoomNotFound         = errors.New("signed room not found")
-	ErrSignedRoomExpired          = errors.New("signed room expired")
-	ErrSignedRoomAlreadyActive    = errors.New("signed room already active")
-	ErrSignedRoomCapacityTooLarge = errors.New("signed room active capacity exceeds maximum")
-	ErrRoomOwnedByAnotherUser     = errors.New("room is owned by another user")
-	ErrInvalidRoomEntryCode       = errors.New("invalid room entry code")
-	ErrRoomEntryCodeUnavailable   = errors.New("room entry code unavailable")
+	ErrSignedRoomUnavailable            = errors.New("signed room service unavailable")
+	ErrInvalidRoomName                  = errors.New("invalid room name")
+	ErrInvalidRoomOwner                 = errors.New("invalid room owner")
+	ErrSignedRoomTTLTooLarge            = errors.New("signed room ttl exceeds maximum")
+	ErrSignedRoomNotFound               = errors.New("signed room not found")
+	ErrSignedRoomExpired                = errors.New("signed room expired")
+	ErrSignedRoomAuthenticationRequired = errors.New("sign-in required for this room")
+	ErrSignedRoomAlreadyActive          = errors.New("signed room already active")
+	ErrSignedRoomCapacityTooLarge       = errors.New("signed room active capacity exceeds maximum")
+	ErrRoomOwnedByAnotherUser           = errors.New("room is owned by another user")
+	ErrInvalidRoomEntryCode             = errors.New("invalid room entry code")
+	ErrInvalidRoomEntryCodeFormat       = errors.New("invalid entry code format")
+	ErrInvalidRoomCredentials           = errors.New("invalid room name or entry code")
+	ErrOwnerUserIDRequired              = errors.New("owner user id is required")
+	ErrRoomIDRequired                   = errors.New("room_id is required")
+	ErrSignedRoomNotFoundOrExpired      = errors.New("signed room not found or already expired")
+	ErrRoomEntryCodeUnavailable         = errors.New("room entry code unavailable")
 )
 
-type MessageStore interface {
+// OperationError preserves a client-safe operation message while retaining the
+// underlying failure for logs and error inspection. It has no transport details.
+type OperationError struct {
+	Message string
+	Cause   error
+}
+
+func (e *OperationError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
+	}
+	return e.Message
+}
+
+func (e *OperationError) Unwrap() error {
+	return e.Cause
+}
+
+type MessageRepository interface {
 	SaveMessage(ctx context.Context, roomID, senderUserID, message string) error
 	GetRecentMessages(ctx context.Context, roomID string, limit int) ([]model.Message, error)
 	DeleteRoomMessages(ctx context.Context, roomID string) error
 	Ping(ctx context.Context) error
 }
 
-type SignedRoomStore interface {
+type SignedRoomRepository interface {
 	CreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, entryCode string, expiresAt time.Time) (model.SignedRoom, error)
 	GetSignedRoomByID(ctx context.Context, roomID string) (model.SignedRoom, error)
 	GetSignedRoomByNameAndCode(ctx context.Context, roomName string, entryCode string) (model.SignedRoom, error)
@@ -73,25 +95,33 @@ type SignedRoomStore interface {
 }
 
 type Service struct {
-	rooms     *Registry
-	store     MessageStore
-	roomStore SignedRoomStore
+	rooms                *Registry
+	messageRepository    MessageRepository
+	signedRoomRepository SignedRoomRepository
 
 	cleanupMu              sync.Mutex
 	lastSignedRoomCleanup  time.Time
 	signedRoomCleanupEvery time.Duration
 }
 
-func NewService(store MessageStore) *Service {
-	return &Service{
-		rooms:                  NewRegistry(),
-		store:                  store,
-		signedRoomCleanupEvery: signedRoomCleanupTTL,
-	}
+// RoomJoin holds the application state prepared before a WebSocket upgrade.
+// A signed room's entry code arrives only after the upgrade, so Complete
+// finishes the same join workflow once the handler receives that handshake.
+type RoomJoin struct {
+	service       *Service
+	roomID        string
+	roomKey       string
+	signedRoom    model.SignedRoom
+	hasSignedRoom bool
 }
 
-func (s *Service) BindSignedRoomStore(store SignedRoomStore) {
-	s.roomStore = store
+func NewService(messageRepository MessageRepository, signedRoomRepository SignedRoomRepository) *Service {
+	return &Service{
+		rooms:                  NewRegistry(),
+		messageRepository:      messageRepository,
+		signedRoomRepository:   signedRoomRepository,
+		signedRoomCleanupEvery: signedRoomCleanupTTL,
+	}
 }
 
 func (s *Service) newClient(socket *websocket.Conn, room *Room, userID, userName string, persistMessages bool) *Client {
@@ -106,7 +136,7 @@ func (s *Service) newClient(socket *websocket.Conn, room *Room, userID, userName
 		receive:  make(chan []byte, MessageBufferSize),
 		userID:   userID,
 		name:     name,
-		messages: s.store,
+		messages: s.messageRepository,
 		persist:  persistMessages,
 	}
 }
@@ -119,7 +149,7 @@ func (s *Service) sendRecentMessages(ctx context.Context, c *Client) {
 	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	messages, err := s.store.GetRecentMessages(queryCtx, c.room.name, 50)
+	messages, err := s.messageRepository.GetRecentMessages(queryCtx, c.room.name, 50)
 	if err != nil {
 		log.Printf("[HISTORY ERROR] Could not query recent messages for room ID %s: %v", c.room.name, err)
 		return
@@ -151,12 +181,63 @@ func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomID
 	return room, client
 }
 
+// HandleJoinRoom prepares the application workflow for joining a room.
+func (s *Service) HandleJoinRoom(ctx context.Context, roomID, roomKey string, authenticated bool) (*RoomJoin, error) {
+	join := &RoomJoin{
+		service: s,
+		roomID:  roomID,
+		roomKey: roomKey,
+	}
+
+	if roomID == "" {
+		return join, nil
+	}
+
+	signedRoom, exists, err := s.HandleGetSignedRoomStatus(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrSignedRoomNotFound
+	}
+	if !authenticated {
+		return nil, ErrSignedRoomAuthenticationRequired
+	}
+
+	join.signedRoom = signedRoom
+	join.hasSignedRoom = true
+	return join, nil
+}
+
+func (j *RoomJoin) RequiresSignedRoomHandshake() bool {
+	return j.hasSignedRoom
+}
+
+// Complete finishes a prepared join after the transport layer receives any
+// signed-room entry-code handshake.
+func (j *RoomJoin) Complete(ctx context.Context, socket *websocket.Conn, userID, username, entryCode string, afterSignedRoomJoin func()) (*Room, *Client, error) {
+	if j.hasSignedRoom {
+		if entryCode != j.signedRoom.EntryCode {
+			return nil, nil, ErrInvalidRoomEntryCode
+		}
+		if err := j.service.HandleRecordSignedRoomJoin(ctx, j.roomID, userID); err != nil {
+			log.Printf("Could not record signed room join for user=%s room=%s: %v", userID, j.roomID, err)
+		}
+		if afterSignedRoomJoin != nil {
+			afterSignedRoomJoin()
+		}
+	}
+
+	room, client := j.service.HandleRoom(ctx, socket, j.roomKey, userID, username, j.hasSignedRoom)
+	return room, client, nil
+}
+
 func (s *Service) HandleHealth(ctx context.Context) error {
-	return s.store.Ping(ctx)
+	return s.messageRepository.Ping(ctx)
 }
 
 func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, ownerUserID string, ttl time.Duration) (model.SignedRoom, error) {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return model.SignedRoom{}, ErrSignedRoomUnavailable
 	}
 
@@ -186,7 +267,7 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 			return model.SignedRoom{}, err
 		}
 
-		room, err = s.roomStore.CreateSignedRoom(ctx, roomName, ownerUserID, entryCode, expiresAt)
+		room, err = s.signedRoomRepository.CreateSignedRoom(ctx, roomName, ownerUserID, entryCode, expiresAt)
 		if err == nil {
 			break
 		}
@@ -203,35 +284,35 @@ func (s *Service) HandleCreateSignedRoom(ctx context.Context, roomName string, o
 	return room, nil
 }
 
-func (s *Service) JoinSignedRoom(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
+func (s *Service) HandleJoinSignedRoom(ctx context.Context, roomName, entryCode string) (model.SignedRoom, error) {
 	roomName = strings.TrimSpace(roomName)
 	if roomName == "" {
-		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid room name", nil)
+		return model.SignedRoom{}, ErrInvalidRoomName
 	}
 
 	entryCode = strings.TrimSpace(entryCode)
 	if entryCode == "" || !isValidRoomEntryCode(entryCode) {
-		return model.SignedRoom{}, util.NewAppError(http.StatusBadRequest, "invalid entry code format", nil)
+		return model.SignedRoom{}, ErrInvalidRoomEntryCodeFormat
 	}
 
-	room, err := s.roomStore.GetSignedRoomByNameAndCode(ctx, roomName, entryCode)
+	room, err := s.signedRoomRepository.GetSignedRoomByNameAndCode(ctx, roomName, entryCode)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return model.SignedRoom{}, util.NewAppError(http.StatusNotFound, "invalid room name or entry code", nil)
+			return model.SignedRoom{}, ErrInvalidRoomCredentials
 		}
-		return model.SignedRoom{}, util.NewAppError(http.StatusInternalServerError, "database error", err)
+		return model.SignedRoom{}, &OperationError{Message: "database error", Cause: err}
 	}
 
 	now := time.Now().UTC()
 	if !room.ExpiresAt.After(now) {
-		return model.SignedRoom{}, util.NewAppError(http.StatusGone, "signed room expired", nil)
+		return model.SignedRoom{}, ErrSignedRoomExpired
 	}
 
 	return room, nil
 }
 
 func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID string) ([]model.SignedRoom, error) {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return nil, ErrSignedRoomUnavailable
 	}
 	if ownerUserID == "" {
@@ -241,11 +322,11 @@ func (s *Service) HandleListOwnedSignedRooms(ctx context.Context, ownerUserID st
 	if err := s.maybeDeleteExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
 		log.Printf("Best-effort signed room cleanup failed before list for owner %s: %v", ownerUserID, err)
 	}
-	return s.roomStore.ListOwnedSignedRooms(ctx, ownerUserID)
+	return s.signedRoomRepository.ListOwnedSignedRooms(ctx, ownerUserID)
 }
 
 func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, ownerUserID string, ttl time.Duration) (model.SignedRoom, error) {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return model.SignedRoom{}, ErrSignedRoomUnavailable
 	}
 
@@ -262,7 +343,7 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, own
 		return model.SignedRoom{}, err
 	}
 
-	room, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
+	room, err := s.signedRoomRepository.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.SignedRoom{}, ErrSignedRoomNotFound
@@ -286,7 +367,7 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, own
 		return model.SignedRoom{}, ErrSignedRoomCapacityTooLarge
 	}
 
-	updated, err := s.roomStore.UpdateSignedRoomExpiry(ctx, roomID, ownerUserID, room.EntryCode, newExpiresAt)
+	updated, err := s.signedRoomRepository.UpdateSignedRoomExpiry(ctx, roomID, ownerUserID, room.EntryCode, newExpiresAt)
 	if err != nil {
 		return model.SignedRoom{}, err
 	}
@@ -297,7 +378,7 @@ func (s *Service) HandleExtendSignedRoom(ctx context.Context, roomID string, own
 }
 
 func (s *Service) HandleRecordSignedRoomJoin(ctx context.Context, roomID string, userID string) error {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return ErrSignedRoomUnavailable
 	}
 
@@ -309,14 +390,14 @@ func (s *Service) HandleRecordSignedRoomJoin(ctx context.Context, roomID string,
 		return ErrInvalidRoomOwner
 	}
 
-	if err := s.roomStore.RecordRoomMembership(ctx, userID, roomID, roomHistoryRoleMember); err != nil {
+	if err := s.signedRoomRepository.RecordRoomMembership(ctx, userID, roomID, roomHistoryRoleMember); err != nil {
 		return err
 	}
-	return s.roomStore.PruneRoomMemberships(ctx, userID, roomHistoryLimit)
+	return s.signedRoomRepository.PruneRoomMemberships(ctx, userID, roomHistoryLimit)
 }
 
 func (s *Service) HandleListRoomHistory(ctx context.Context, userID string) ([]model.RoomHistory, error) {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return nil, ErrSignedRoomUnavailable
 	}
 	if userID == "" {
@@ -326,11 +407,11 @@ func (s *Service) HandleListRoomHistory(ctx context.Context, userID string) ([]m
 	if err := s.maybeDeleteExpiredSignedRooms(ctx, time.Now().UTC()); err != nil {
 		log.Printf("Best-effort signed room cleanup failed before history list for user %s: %v", userID, err)
 	}
-	return s.roomStore.ListRoomMemberships(ctx, userID, roomHistoryLimit)
+	return s.signedRoomRepository.ListRoomMemberships(ctx, userID, roomHistoryLimit)
 }
 
 func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, ownerUserID string, ttl time.Duration) (model.SignedRoom, error) {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return model.SignedRoom{}, ErrSignedRoomUnavailable
 	}
 
@@ -348,7 +429,7 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 	}
 
 	now := time.Now().UTC()
-	existing, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
+	existing, err := s.signedRoomRepository.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.SignedRoom{}, ErrSignedRoomNotFound
@@ -369,7 +450,7 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 			return model.SignedRoom{}, err
 		}
 
-		room, err = s.roomStore.UpdateSignedRoomExpiry(ctx, roomID, ownerUserID, entryCode, now.Add(normalizedTTL))
+		room, err = s.signedRoomRepository.UpdateSignedRoomExpiry(ctx, roomID, ownerUserID, entryCode, now.Add(normalizedTTL))
 		if err == nil {
 			break
 		}
@@ -391,26 +472,26 @@ func (s *Service) HandleReviveSignedRoom(ctx context.Context, roomID string, own
 // HandleDeleteSignedRoom performs a "soft delete" by expiring the room,
 // putting it into a 7-day grace period where it can be revived or purged.
 func (s *Service) HandleDeleteSignedRoom(ctx context.Context, roomID string, ownerUserID string) error {
-	if s.roomStore == nil {
-		return util.NewAppError(http.StatusServiceUnavailable, ErrSignedRoomUnavailable.Error(), nil)
+	if s.signedRoomRepository == nil {
+		return ErrSignedRoomUnavailable
 	}
 
 	roomID = strings.TrimSpace(roomID)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 
 	if roomID == "" {
-		return util.NewAppError(http.StatusBadRequest, ErrInvalidRoomName.Error(), nil)
+		return ErrInvalidRoomName
 	}
 	if ownerUserID == "" {
-		return util.NewAppError(http.StatusBadRequest, "owner user id is required", nil)
+		return ErrOwnerUserIDRequired
 	}
 
-	err := s.roomStore.ExpireSignedRoom(ctx, roomID, ownerUserID)
+	err := s.signedRoomRepository.ExpireSignedRoom(ctx, roomID, ownerUserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return util.NewAppError(http.StatusNotFound, "signed room not found or already expired", nil)
+			return ErrSignedRoomNotFoundOrExpired
 		}
-		return util.NewAppError(http.StatusInternalServerError, "failed to delete signed room", err)
+		return &OperationError{Message: "failed to delete signed room", Cause: err}
 	}
 
 	// Actively kick out any connected clients (like guests) so they can't keep chatting
@@ -436,26 +517,26 @@ func (s *Service) HandlePurgeSignedRoom(ctx context.Context, roomID string, owne
 	ownerUserID = strings.TrimSpace(ownerUserID)
 
 	if roomID == "" {
-		return util.NewAppError(http.StatusBadRequest, "room_id is required", nil)
+		return ErrRoomIDRequired
 	}
 	if ownerUserID == "" {
-		return util.NewAppError(http.StatusBadRequest, "owner user id is required", nil)
+		return ErrOwnerUserIDRequired
 	}
-	if s.roomStore == nil {
-		return util.NewAppError(http.StatusServiceUnavailable, ErrSignedRoomUnavailable.Error(), nil)
+	if s.signedRoomRepository == nil {
+		return ErrSignedRoomUnavailable
 	}
-	room, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
+	room, err := s.signedRoomRepository.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return util.NewAppError(http.StatusNotFound, ErrSignedRoomNotFound.Error(), err)
+			return ErrSignedRoomNotFound
 		}
-		return util.NewAppError(http.StatusInternalServerError, "database error", err)
+		return &OperationError{Message: "database error", Cause: err}
 	}
 	if room.OwnerUserID != ownerUserID {
-		return util.NewAppError(http.StatusForbidden, ErrRoomOwnedByAnotherUser.Error(), nil)
+		return ErrRoomOwnedByAnotherUser
 	}
-	if err := s.roomStore.DeleteSignedRoomByID(ctx, roomID); err != nil {
-		return util.NewAppError(http.StatusInternalServerError, "database error", err)
+	if err := s.signedRoomRepository.DeleteSignedRoomByID(ctx, roomID); err != nil {
+		return &OperationError{Message: "database error", Cause: err}
 	}
 
 	// Actively kick out any connected clients
@@ -478,17 +559,17 @@ func (s *Service) HandlePurgeSignedRoom(ctx context.Context, roomID string, owne
 }
 
 func (s *Service) recordRoomMembershipBestEffort(ctx context.Context, userID string, roomID, role string) {
-	if err := s.roomStore.RecordRoomMembership(ctx, userID, roomID, role); err != nil {
+	if err := s.signedRoomRepository.RecordRoomMembership(ctx, userID, roomID, role); err != nil {
 		log.Printf("Could not record room membership user=%s room=%s role=%s: %v", userID, roomID, role, err)
 		return
 	}
-	if err := s.roomStore.PruneRoomMemberships(ctx, userID, roomHistoryLimit); err != nil {
+	if err := s.signedRoomRepository.PruneRoomMemberships(ctx, userID, roomHistoryLimit); err != nil {
 		log.Printf("Could not prune room history user=%s: %v", userID, err)
 	}
 }
 
 func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomID string) (model.SignedRoom, bool, error) {
-	if s.roomStore == nil {
+	if s.signedRoomRepository == nil {
 		return model.SignedRoom{}, false, ErrSignedRoomUnavailable
 	}
 
@@ -497,7 +578,7 @@ func (s *Service) HandleGetSignedRoomStatus(ctx context.Context, roomID string) 
 		return model.SignedRoom{}, false, ErrInvalidRoomName
 	}
 
-	room, err := s.roomStore.GetSignedRoomByID(ctx, roomID)
+	room, err := s.signedRoomRepository.GetSignedRoomByID(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.SignedRoom{}, false, nil
@@ -536,14 +617,22 @@ func isValidRoomEntryCode(code string) bool {
 }
 
 func generateRoomEntryCode() (string, error) {
-	minValue := model.SignedRoomEntryCodeMinValue()
-	rangeSize := model.SignedRoomEntryCodeRangeSize()
+	minValue := signedRoomEntryCodeMinValue()
+	rangeSize := minValue * 9
 
 	n, err := rand.Int(rand.Reader, big.NewInt(rangeSize))
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%0*d", SignedRoomCodeLength, n.Int64()+minValue), nil
+}
+
+func signedRoomEntryCodeMinValue() int64 {
+	minValue := int64(1)
+	for i := 1; i < SignedRoomCodeLength; i++ {
+		minValue *= 10
+	}
+	return minValue
 }
 
 func isUniqueConstraintViolation(err error) bool {
@@ -557,7 +646,7 @@ func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Ti
 	gracePeriodCutoff := now.Add(-7 * 24 * time.Hour)
 
 	if s.signedRoomCleanupEvery <= 0 {
-		expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
+		expiredRoomIDs, err := s.signedRoomRepository.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
 		if err != nil {
 			return err
 		}
@@ -576,7 +665,7 @@ func (s *Service) maybeDeleteExpiredSignedRooms(ctx context.Context, now time.Ti
 		return nil
 	}
 
-	expiredRoomIDs, err := s.roomStore.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
+	expiredRoomIDs, err := s.signedRoomRepository.DeleteExpiredSignedRooms(ctx, gracePeriodCutoff)
 	if err != nil {
 		s.cleanupMu.Lock()
 		s.lastSignedRoomCleanup = time.Time{}
@@ -594,7 +683,7 @@ func (s *Service) deleteRoomMessagesForRooms(ctx context.Context, roomIDs []stri
 }
 
 func (s *Service) deleteRoomMessagesBestEffort(ctx context.Context, roomID string) {
-	if s.store == nil {
+	if s.messageRepository == nil {
 		return
 	}
 
@@ -606,7 +695,7 @@ func (s *Service) deleteRoomMessagesBestEffort(ctx context.Context, roomID strin
 	deleteCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	if err := s.store.DeleteRoomMessages(deleteCtx, roomID); err != nil {
+	if err := s.messageRepository.DeleteRoomMessages(deleteCtx, roomID); err != nil {
 		log.Printf("Could not delete messages for signed room %s: %v", roomID, err)
 	}
 }

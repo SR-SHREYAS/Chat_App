@@ -14,7 +14,6 @@ import (
 
 	"real_time_chat_app/internal/app/auth"
 	"real_time_chat_app/internal/app/chat"
-	"real_time_chat_app/internal/model"
 	"real_time_chat_app/internal/util"
 
 	"github.com/gorilla/websocket"
@@ -47,8 +46,15 @@ func NewHandler(chatService *chat.Service, authService *auth.Service) *Handler {
 }
 
 func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
+	// Transport Validation
+	// The WebSocket upgrader validates the transport transition below. Keep that
+	// validation at its existing point so HTTP and WebSocket error behavior remain unchanged.
+
+	// Request Parsing
 	roomID := util.SanitizeQueryValue(r.URL.Query().Get("room_id"), 64)
 	unsignedRoomName := util.SanitizeQueryValue(r.URL.Query().Get("room"), 64)
+
+	// Request Validation
 	if roomID != "" && unsignedRoomName != "" {
 		http.Error(w, "Ambiguous room parameters: specify only one of room_id or room", http.StatusBadRequest)
 		return
@@ -63,6 +69,7 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Authentication
 	var (
 		authUser auth.AuthUser
 		isAuth   bool
@@ -77,12 +84,8 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var signedRoom model.SignedRoom
-	hasSignedRoom := false
-	var err error
-	if roomID != "" {
-		signedRoom, hasSignedRoom, err = h.chatService.HandleGetSignedRoomStatus(r.Context(), roomID)
-	}
+	// Application Use Case
+	roomJoin, err := h.chatService.HandleJoinRoom(r.Context(), roomID, roomKey, isAuth)
 	if err != nil {
 		switch {
 		case errors.Is(err, chat.ErrSignedRoomExpired):
@@ -92,24 +95,21 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Signed room service unavailable: %v", err)
 			http.Error(w, "Signed room service unavailable", http.StatusServiceUnavailable)
 			return
+		case errors.Is(err, chat.ErrSignedRoomNotFound):
+			http.Error(w, "Room not found", http.StatusNotFound)
+			return
+		case errors.Is(err, chat.ErrSignedRoomAuthenticationRequired):
+			http.Error(w, "Sign-in required for this room", http.StatusUnauthorized)
+			return
 		default:
 			log.Printf("Could not resolve signed room status: %v", err)
 			http.Error(w, "Could not resolve room", http.StatusInternalServerError)
 			return
 		}
 	}
-	if roomID != "" && !hasSignedRoom {
-		http.Error(w, "Room not found", http.StatusNotFound)
-		return
-	}
-	if hasSignedRoom {
-		if !isAuth {
-			http.Error(w, "Sign-in required for this room", http.StatusUnauthorized)
-			return
-		}
-	}
 	joinScope := h.newSignedRoomJoinScope(r, roomKey, authUser)
 
+	// Session Context Preparation
 	userID := util.SanitizeQueryValue(r.URL.Query().Get("user_id"), 32)
 	if userID == "" {
 		userID = randomGuestID()
@@ -120,44 +120,46 @@ func (h *Handler) handleRoom(w http.ResponseWriter, r *http.Request) {
 		userName = authUser.Username
 	}
 
+	// WebSocket Upgrade
 	socket, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
 		return
 	}
 
-	if hasSignedRoom {
+	// Signed Room Handshake
+	entryCode := ""
+	if roomJoin.RequiresSignedRoomHandshake() {
 		if h.isSignedRoomJoinBlocked(joinScope) {
 			closeWithPolicyViolation(socket, "too many failed entry code attempts")
 			return
 		}
 
-		entryCode, err := readSignedRoomEntryCodeHandshake(socket)
+		entryCode, err = readSignedRoomEntryCodeHandshake(socket)
 		if err != nil {
 			log.Printf("Missing/invalid signed room auth handshake for room %s: %v", roomID, err)
 			closeWithPolicyViolation(socket, "entry code required")
 			return
 		}
 
-		if entryCode != signedRoom.EntryCode {
-			h.recordSignedRoomJoinFailure(joinScope)
-			if h.isSignedRoomJoinBlocked(joinScope) {
-				closeWithPolicyViolation(socket, "too many failed entry code attempts")
-				return
-			}
-			closeWithPolicyViolation(socket, "invalid entry code")
-			return
-		}
-		if err := h.chatService.HandleRecordSignedRoomJoin(r.Context(), roomID, authUser.ID); err != nil {
-			log.Printf("Could not record signed room join for user=%s room=%s: %v", authUser.ID, roomID, err)
-		}
-		h.resetSignedRoomJoinFailures(joinScope)
 	}
 
+	// Session Startup
 	if isAuth {
 		userID = authUser.ID
 	}
-	realRoom, client := h.chatService.HandleRoom(r.Context(), socket, roomKey, userID, userName, hasSignedRoom)
+	realRoom, client, err := roomJoin.Complete(r.Context(), socket, userID, userName, entryCode, func() {
+		h.resetSignedRoomJoinFailures(joinScope)
+	})
+	if errors.Is(err, chat.ErrInvalidRoomEntryCode) {
+		h.recordSignedRoomJoinFailure(joinScope)
+		if h.isSignedRoomJoinBlocked(joinScope) {
+			closeWithPolicyViolation(socket, "too many failed entry code attempts")
+			return
+		}
+		closeWithPolicyViolation(socket, "invalid entry code")
+		return
+	}
 
 	realRoom.Join(client)
 	defer realRoom.Leave(client)

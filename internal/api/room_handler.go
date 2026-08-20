@@ -185,7 +185,7 @@ func (h *Handler) handleSignedRoomConfig(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *Handler) joinSignedRoom(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleJoinSignedRoom(w http.ResponseWriter, r *http.Request) {
 	// panic recovery
 	defer func() {
 		if err := recover(); err != nil {
@@ -232,30 +232,14 @@ func (h *Handler) joinSignedRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call to service layer with request context
-	room, err := h.chatService.JoinSignedRoom(r.Context(), roomName, entryCode)
+	room, err := h.chatService.HandleJoinSignedRoom(r.Context(), roomName, entryCode)
 	if err != nil {
-		var appErr *util.AppError
-		if errors.As(err, &appErr) {
-			// Handle the rate-limit failure logic for forbidden entry attempts
-			if appErr.StatusCode == http.StatusForbidden {
-				h.recordSignedRoomJoinFailure(joinScope)
-				if h.isSignedRoomJoinBlocked(joinScope) {
-					writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: "too many failed entry code attempts; retry later"})
-					return
-				}
-			}
-
-			// Log internal DB errors to terminal
-			if appErr.Internal != nil {
-				log.Printf("[ERROR] joinSignedRoom: %v", appErr.Internal)
-			}
-
-			// Return the error response
-			writeJSON(w, appErr.StatusCode, errorEnvelope{Error: appErr.Message})
+		var operationErr *chat.OperationError
+		if errors.As(err, &operationErr) && operationErr.Cause != nil {
+			log.Printf("[ERROR] joinSignedRoom: %v", operationErr.Cause)
+			writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: operationErr.Message})
 			return
 		}
-
-		// Fallback for unexpected standard errors
 		h.writeSignedRoomError(w, err)
 		return
 	}
@@ -415,23 +399,23 @@ func (h *Handler) handleSignedRoomStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) writeSignedRoomError(w http.ResponseWriter, err error) {
-	var appErr *util.AppError
-	if errors.As(err, &appErr) {
-		if appErr.Internal != nil {
-			log.Printf("[ERROR] signed room error: kind=internal message=%q", appErr.Message)
+	var operationErr *chat.OperationError
+	if errors.As(err, &operationErr) {
+		if operationErr.Cause != nil {
+			log.Printf("[ERROR] signed room error: kind=internal message=%q", operationErr.Message)
 		}
-		writeJSON(w, appErr.StatusCode, errorEnvelope{Error: appErr.Message})
+		writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: operationErr.Message})
 		return
 	}
 
 	switch {
 	case errors.Is(err, chat.ErrSignedRoomUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, errorEnvelope{Error: err.Error()})
-	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrSignedRoomTTLTooLarge), errors.Is(err, chat.ErrSignedRoomCapacityTooLarge):
+	case errors.Is(err, chat.ErrInvalidRoomName), errors.Is(err, chat.ErrInvalidRoomOwner), errors.Is(err, chat.ErrInvalidRoomEntryCodeFormat), errors.Is(err, chat.ErrOwnerUserIDRequired), errors.Is(err, chat.ErrRoomIDRequired), errors.Is(err, chat.ErrSignedRoomTTLTooLarge), errors.Is(err, chat.ErrSignedRoomCapacityTooLarge):
 		writeJSON(w, http.StatusBadRequest, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrInvalidRoomEntryCode):
 		writeJSON(w, http.StatusForbidden, errorEnvelope{Error: err.Error()})
-	case errors.Is(err, chat.ErrSignedRoomNotFound):
+	case errors.Is(err, chat.ErrSignedRoomNotFound), errors.Is(err, chat.ErrSignedRoomNotFoundOrExpired), errors.Is(err, chat.ErrInvalidRoomCredentials):
 		writeJSON(w, http.StatusNotFound, errorEnvelope{Error: err.Error()})
 	case errors.Is(err, chat.ErrSignedRoomExpired):
 		writeJSON(w, http.StatusGone, errorEnvelope{Error: err.Error()})
