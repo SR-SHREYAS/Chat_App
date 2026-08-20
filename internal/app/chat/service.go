@@ -35,22 +35,23 @@ const (
 )
 
 var (
-	ErrSignedRoomUnavailable       = errors.New("signed room service unavailable")
-	ErrInvalidRoomName             = errors.New("invalid room name")
-	ErrInvalidRoomOwner            = errors.New("invalid room owner")
-	ErrSignedRoomTTLTooLarge       = errors.New("signed room ttl exceeds maximum")
-	ErrSignedRoomNotFound          = errors.New("signed room not found")
-	ErrSignedRoomExpired           = errors.New("signed room expired")
-	ErrSignedRoomAlreadyActive     = errors.New("signed room already active")
-	ErrSignedRoomCapacityTooLarge  = errors.New("signed room active capacity exceeds maximum")
-	ErrRoomOwnedByAnotherUser      = errors.New("room is owned by another user")
-	ErrInvalidRoomEntryCode        = errors.New("invalid room entry code")
-	ErrInvalidRoomEntryCodeFormat  = errors.New("invalid entry code format")
-	ErrInvalidRoomCredentials      = errors.New("invalid room name or entry code")
-	ErrOwnerUserIDRequired         = errors.New("owner user id is required")
-	ErrRoomIDRequired              = errors.New("room_id is required")
-	ErrSignedRoomNotFoundOrExpired = errors.New("signed room not found or already expired")
-	ErrRoomEntryCodeUnavailable    = errors.New("room entry code unavailable")
+	ErrSignedRoomUnavailable            = errors.New("signed room service unavailable")
+	ErrInvalidRoomName                  = errors.New("invalid room name")
+	ErrInvalidRoomOwner                 = errors.New("invalid room owner")
+	ErrSignedRoomTTLTooLarge            = errors.New("signed room ttl exceeds maximum")
+	ErrSignedRoomNotFound               = errors.New("signed room not found")
+	ErrSignedRoomExpired                = errors.New("signed room expired")
+	ErrSignedRoomAuthenticationRequired = errors.New("sign-in required for this room")
+	ErrSignedRoomAlreadyActive          = errors.New("signed room already active")
+	ErrSignedRoomCapacityTooLarge       = errors.New("signed room active capacity exceeds maximum")
+	ErrRoomOwnedByAnotherUser           = errors.New("room is owned by another user")
+	ErrInvalidRoomEntryCode             = errors.New("invalid room entry code")
+	ErrInvalidRoomEntryCodeFormat       = errors.New("invalid entry code format")
+	ErrInvalidRoomCredentials           = errors.New("invalid room name or entry code")
+	ErrOwnerUserIDRequired              = errors.New("owner user id is required")
+	ErrRoomIDRequired                   = errors.New("room_id is required")
+	ErrSignedRoomNotFoundOrExpired      = errors.New("signed room not found or already expired")
+	ErrRoomEntryCodeUnavailable         = errors.New("room entry code unavailable")
 )
 
 // OperationError preserves a client-safe operation message while retaining the
@@ -101,6 +102,17 @@ type Service struct {
 	cleanupMu              sync.Mutex
 	lastSignedRoomCleanup  time.Time
 	signedRoomCleanupEvery time.Duration
+}
+
+// RoomJoin holds the application state prepared before a WebSocket upgrade.
+// A signed room's entry code arrives only after the upgrade, so Complete
+// finishes the same join workflow once the handler receives that handshake.
+type RoomJoin struct {
+	service       *Service
+	roomID        string
+	roomKey       string
+	signedRoom    model.SignedRoom
+	hasSignedRoom bool
 }
 
 func NewService(messageRepository MessageRepository, signedRoomRepository SignedRoomRepository) *Service {
@@ -167,6 +179,57 @@ func (s *Service) HandleRoom(ctx context.Context, socket *websocket.Conn, roomID
 	client := s.newClient(socket, room, userID, username, persistMessages)
 	s.sendRecentMessages(ctx, client)
 	return room, client
+}
+
+// HandleJoinRoom prepares the application workflow for joining a room.
+func (s *Service) HandleJoinRoom(ctx context.Context, roomID, roomKey string, authenticated bool) (*RoomJoin, error) {
+	join := &RoomJoin{
+		service: s,
+		roomID:  roomID,
+		roomKey: roomKey,
+	}
+
+	if roomID == "" {
+		return join, nil
+	}
+
+	signedRoom, exists, err := s.HandleGetSignedRoomStatus(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrSignedRoomNotFound
+	}
+	if !authenticated {
+		return nil, ErrSignedRoomAuthenticationRequired
+	}
+
+	join.signedRoom = signedRoom
+	join.hasSignedRoom = true
+	return join, nil
+}
+
+func (j *RoomJoin) RequiresSignedRoomHandshake() bool {
+	return j.hasSignedRoom
+}
+
+// Complete finishes a prepared join after the transport layer receives any
+// signed-room entry-code handshake.
+func (j *RoomJoin) Complete(ctx context.Context, socket *websocket.Conn, userID, username, entryCode string, afterSignedRoomJoin func()) (*Room, *Client, error) {
+	if j.hasSignedRoom {
+		if entryCode != j.signedRoom.EntryCode {
+			return nil, nil, ErrInvalidRoomEntryCode
+		}
+		if err := j.service.HandleRecordSignedRoomJoin(ctx, j.roomID, userID); err != nil {
+			log.Printf("Could not record signed room join for user=%s room=%s: %v", userID, j.roomID, err)
+		}
+		if afterSignedRoomJoin != nil {
+			afterSignedRoomJoin()
+		}
+	}
+
+	room, client := j.service.HandleRoom(ctx, socket, j.roomKey, userID, username, j.hasSignedRoom)
+	return room, client, nil
 }
 
 func (s *Service) HandleHealth(ctx context.Context) error {

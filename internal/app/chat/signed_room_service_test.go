@@ -479,6 +479,69 @@ func TestHandleJoinSignedRoom(t *testing.T) {
 	})
 }
 
+func TestHandleJoinRoom(t *testing.T) {
+	store := newFakeSignedRoomStore()
+	store.rooms["signed-room"] = model.SignedRoom{
+		ID:        "signed-room",
+		RoomName:  "alpha",
+		EntryCode: "1234",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}
+	service := NewService(noopMessageStore{}, store)
+
+	join, err := service.HandleJoinRoom(context.Background(), "signed-room", "signed-room", true)
+	if err != nil {
+		t.Fatalf("prepare room join: %v", err)
+	}
+	if !join.RequiresSignedRoomHandshake() {
+		t.Fatal("expected signed room handshake to be required")
+	}
+
+	if _, _, err := join.Complete(context.Background(), nil, "user-1", "user", "0000", nil); !errors.Is(err, ErrInvalidRoomEntryCode) {
+		t.Fatalf("expected invalid entry code error, got %v", err)
+	}
+
+	resetCalled := false
+	room, client, err := join.Complete(context.Background(), nil, "user-1", "user", "1234", func() {
+		resetCalled = true
+	})
+	if err != nil {
+		t.Fatalf("complete room join: %v", err)
+	}
+	if room == nil || client == nil {
+		t.Fatalf("expected room and client, got room=%v client=%v", room, client)
+	}
+	if !resetCalled {
+		t.Fatal("expected post-membership callback to run")
+	}
+
+	history, err := service.HandleListRoomHistory(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("list room history: %v", err)
+	}
+	if len(history) != 1 || history[0].RoomID != "signed-room" || history[0].Role != roomHistoryRoleMember {
+		t.Fatalf("expected signed-room membership, got %+v", history)
+	}
+}
+
+func TestHandleJoinRoom_RejectsMissingOrUnauthenticatedSignedRooms(t *testing.T) {
+	store := newFakeSignedRoomStore()
+	store.rooms["signed-room"] = model.SignedRoom{
+		ID:        "signed-room",
+		RoomName:  "alpha",
+		EntryCode: "1234",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}
+	service := NewService(noopMessageStore{}, store)
+
+	if _, err := service.HandleJoinRoom(context.Background(), "missing", "missing", true); !errors.Is(err, ErrSignedRoomNotFound) {
+		t.Fatalf("expected signed room not found, got %v", err)
+	}
+	if _, err := service.HandleJoinRoom(context.Background(), "signed-room", "signed-room", false); !errors.Is(err, ErrSignedRoomAuthenticationRequired) {
+		t.Fatalf("expected signed room authentication error, got %v", err)
+	}
+}
+
 func TestHandleListOwnedSignedRooms(t *testing.T) {
 	t.Run("invalid owner", func(t *testing.T) {
 		service := NewService(noopMessageStore{}, newFakeSignedRoomStore())
